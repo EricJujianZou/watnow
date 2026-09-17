@@ -1,6 +1,6 @@
 import { getState, getSettings, getFilter, setFilter, emptyState } from "../src/core/store.js";
 import { buildModel } from "../src/core/model.js";
-import { fmtAgo } from "../src/core/dates.js";
+import { fmtAgo, fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
 import { icon, brandMark, esc, CATEGORY_ICON } from "../src/ui/icons.js";
 import { mountSettings, applyTheme } from "../src/ui/settings-view.js";
 import { liveBase } from "../src/data/live-source.js";
@@ -55,7 +55,7 @@ function renderBar() {
   if (PREVIEW) status = "";
   else if (scan === "running") status = `<span class="bar-status">Reading Learn</span>`;
   else if (state.syncing) status = `<span class="bar-status">Checking Learn</span>`;
-  else if (scan === "done" && state.lastSyncAt) status = `<span class="bar-status">Updated ${fmtAgo(state.lastSyncAt, new Date())}</span>`;
+  else if (scan === "done" && state.lastSyncAt && !state.stale) status = `<span class="bar-status">Updated ${fmtAgo(state.lastSyncAt, new Date())}</span>`;
   const busy = scan === "running" || state.syncing;
   const refresh =
     PREVIEW || (scan !== "done" && !busy)
@@ -215,6 +215,17 @@ function groupHTML(g) {
   return `<section class="group" data-group="${g.id}"><h2 class="group-head" data-flip="g-${g.id}">${head}</h2><ul class="rows">${rows}</ul></section>`;
 }
 
+/** Shown above the list when the last check couldn't read Learn. */
+function staleHTML(now) {
+  const st = state.stale;
+  if (!st || !state.lastSyncAt) return "";
+  const at = new Date(state.lastSyncAt);
+  const when = sameDay(at, now) ? `at ${fmtTime(at)}` : `on ${fmtDate(at)} at ${fmtTime(at)}`;
+  const lead = st.kind === "signed-out" ? "Learn signed you out." : "Couldn't reach Learn.";
+  const action = st.kind === "unreachable" ? "" : `<button class="link-btn stale-btn" data-act="open-learn">Open Learn</button>`;
+  return `<div class="stale" role="status" data-flip="stale">${icon("info", 16)}<p>${esc(`${lead} Showing what ${APP} read ${when}.`)}</p>${action}</div>`;
+}
+
 function renderList() {
   const now = new Date();
   const m = buildModel(state, now, filter);
@@ -237,6 +248,7 @@ function renderList() {
 
   app.innerHTML = `
     <div class="list-view">
+      ${staleHTML(now)}
       <section class="verdict" data-flip="verdict">
         <h1 class="verdict-h">${esc(m.verdict.headline)}</h1>
         ${m.verdict.detail ? `<p class="late-line">${icon("alert", 18)}<span>${esc(m.verdict.detail)}</span></p>` : ""}
@@ -411,6 +423,12 @@ function renderStateView(kind) {
       body: "WATnow reads Learn through the session in this browser. Open Learn and sign in. Your deadlines show up here once a Learn page loads. If they don't, select Try again.",
       action: `<div class="row-actions"><button class="btn btn-primary" data-act="open-learn">Open Learn</button><button class="btn btn-quiet" data-act="retry">Try again</button></div>`,
     },
+    offline: {
+      mark: icon("alert", 24),
+      title: "Couldn't reach Learn",
+      body: "Check that this computer is online, then try again.",
+      action: `<button class="btn btn-primary" data-act="retry">Try again</button>`,
+    },
     error: {
       mark: icon("alert", 24),
       late: true,
@@ -442,7 +460,8 @@ function renderStateView(kind) {
 }
 
 function errorKind() {
-  return state.errorKind === "signed-out" ? "signed-out" : "error";
+  if (state.errorKind === "signed-out" || state.errorKind === "offline") return state.errorKind;
+  return "error";
 }
 
 /** A finished read with nothing to list gets a whole-panel state instead of an empty list. */
@@ -680,4 +699,11 @@ setInterval(() => {
   route();
   if (!PREVIEW) pingPanelOpen();
   if (!PREVIEW && (state.scan.status === "idle" || state.scan.status === "running") && !state.deletedAt) send("panel:opened");
+  // The last check couldn't read Learn: try again now that the student is looking.
+  if (!PREVIEW && state.scan.status === "done" && state.stale) send("panel:check");
 })();
+
+window.addEventListener("online", () => {
+  if (PREVIEW) return;
+  if ((state.scan.status === "done" && state.stale) || (state.scan.status === "error" && state.errorKind === "offline")) send("panel:check");
+});

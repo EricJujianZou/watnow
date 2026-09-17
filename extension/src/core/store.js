@@ -35,7 +35,11 @@ export function emptyState() {
     lastSyncAt: null,
     syncing: false,
     error: null,
+    // signed-out | offline | error: why the panel shows a whole-panel screen instead of the list
     errorKind: null,
+    // { kind: "unreachable" | "no-tab" | "signed-out", at, online }: the last check
+    // couldn't read Learn, so the list is what the last good read found
+    stale: null,
     seq: 0,
     lastEvent: null,
     demo: { moveStep: 0 },

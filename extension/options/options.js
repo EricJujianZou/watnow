@@ -39,6 +39,8 @@ function plural(n, one, many) {
 const OUTCOME = {
   "signed-out": "Learn said nobody was signed in.",
   "no-tab": "Learn said nobody was signed in, and no Learn tab was open to try instead.",
+  unreachable: "WATnow couldn't reach Learn. The network was down or Learn didn't answer.",
+  "every-course-failed": "Learn answered, but every course failed to read.",
   error: "The read stopped with an error.",
   "course-failed": "The read stopped with an error.",
 };

@@ -29,7 +29,7 @@
     }
     (async () => {
       try {
-        const res = await fetch(location.origin + path, { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" } });
+        const res = await fetch(location.origin + path, { method: "GET", credentials: "same-origin", headers: { Accept: "application/json" }, signal: AbortSignal.timeout(20000) });
         const type = res.headers.get("content-type") || "";
         const out = { status: res.status, redirected: res.redirected, loginRedirect: /\/d2l\/login/i.test(res.url || ""), type };
         if (res.ok && type.includes("json")) {

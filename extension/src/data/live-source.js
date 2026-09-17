@@ -89,8 +89,15 @@
   with the same title and due minute are merged last (dropEchoes).
   Items may carry opensAt (ISO) when Learn gives a start date before the due date.
 
+  Each item carries dueField ("due" when it came from DueDate, "end" when from
+  an end date, "event" for a plain calendar event) and seenIn (the sources that
+  listed it: dropbox, quizzes, discussions, feed, calendar). source.readOk maps
+  each course id to the sources that read completely this time.
+
   Change detection lives in background.js (mergeLive): a 30 minute alarm reads
-  everything again and compares each stored dueAt.
+  everything again and compares each stored dueAt. A change of dueField alone
+  is not a move. An item missing from a read is dropped only when every source
+  in its seenIn read completely.
 
   Where the requests run
      1. The background service worker fetches with credentials: "include".
@@ -98,7 +105,11 @@
         session cookie. VERIFY with UW's cookie settings.
      2. If the worker looks signed out, an open Learn tab's content script
         (learn-bridge.js) runs the same GET from the page's own origin.
-     3. If neither works, the panel shows the signed-out state.
+     3. If neither works, checkSession gives a reason: signed-out (a Learn tab
+        confirms it), no-tab (the worker looks signed out and no tab is open)
+        or unreachable (no answer, timeout, Learn down). With a saved list the
+        background keeps it and its reminders and shows a notice instead.
+     Every request gives up after REQUEST_TIMEOUT_MS.
      Only GET requests are used, so no CSRF token is needed.
 
   One request at a time, spaced 150 ms apart.
@@ -109,6 +120,8 @@ export const LEARN_BASE = "https://learn.uwaterloo.ca";
 
 const FALLBACK_VERSIONS = { lp: "1.30", le: "1.60" };
 const GAP_MS = 150;
+// A request that takes longer than this counts as Learn being unreachable.
+export const REQUEST_TIMEOUT_MS = 20000;
 const COLORS = ["pink", "green", "orange", "blue", "violet", "mint"];
 const ACTIVITY_KIND = { 3: "dropbox", 4: "quiz", 5: "discussion", 6: "discussion" };
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -339,6 +352,9 @@ const utcDateTime = (d) => new Date(d).toISOString();
 /** An opens date only matters when it is before the due date. */
 const laterOnly = (opens, due) => (opens && due && opens < due ? opens : null);
 
+/** Which Learn field a due date came from: "due" for DueDate, "end" for an end date. */
+const fieldOf = (dueValue) => (isoOrNull(dueValue) ? "due" : "end");
+
 /** Per tool counts for the report: how many rows came back, how many were hidden or had no date, with a few undated examples. */
 function seenCounter(rep, tool, total) {
   const stats = { total, hidden: 0, dated: 0, undated: 0, undatedSamples: [] };
@@ -430,6 +446,7 @@ function dropEchoes(items) {
         keep.completedAt = i.completedAt;
       }
       if (!keep.opensAt && i.opensAt) keep.opensAt = i.opensAt;
+      for (const x of i.seen || []) keep.seen && keep.seen.add(x);
       continue;
     }
     if (!keep) seen.set(k, i);
@@ -469,8 +486,25 @@ function signedOutError() {
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const SIGNED_OUT_WHY = new Set(["signed-out", "forbidden", "not-json", "odd-whoami"]);
+
+/**
+ * Why a session check failed, from what the worker and the Learn tab each got.
+ *   signed-out   an open Learn tab says nobody is signed in, so the login really expired
+ *   unreachable  no answer from Learn (no network, timeout, Learn down)
+ *   no-tab       the worker looks signed out and there is no Learn tab to ask. The
+ *                worker may simply not get the cookie, so this is not proof of a
+ *                signed-out student.
+ */
+export function sessionReason(workerWhy, tabWhy) {
+  if (SIGNED_OUT_WHY.has(tabWhy)) return "signed-out";
+  if (tabWhy !== "no-tab") return "unreachable";
+  if (SIGNED_OUT_WHY.has(workerWhy)) return "no-tab";
+  return "unreachable";
+}
+
 /* ------------------------------------------------------------------ */
-/* Source                                                              */
+/* Source                                                            */
 /* ------------------------------------------------------------------ */
 
 export class LiveSource {
@@ -493,6 +527,10 @@ export class LiveSource {
     this.fullShapes = new Set();
     this.personal = [];
     this.calendar = null;
+    // Course id -> the sources that read completely for it this time
+    // (dropbox, quizzes, discussions, feed, calendar). An item that disappeared
+    // is only dropped when every source it came from read completely.
+    this.readOk = new Map();
     this.report = {
       kind: "watnow-live-debug",
       startedAt: this.now.toISOString(),
@@ -512,9 +550,13 @@ export class LiveSource {
   async workerFetch(path) {
     let res;
     try {
-      res = await fetch(this.base + path, { credentials: "include", headers: { Accept: "application/json" } });
+      res = await fetch(this.base + path, {
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
     } catch (e) {
-      return { status: 0, error: String(e && e.message ? e.message : e) };
+      return { status: 0, error: e && e.name === "TimeoutError" ? "timeout" : String(e && e.message ? e.message : e) };
     }
     const type = res.headers.get("content-type") || "";
     const loginRedirect = /\/d2l\/login/i.test(res.url || "");
@@ -545,7 +587,15 @@ export class LiveSource {
     if (via === "tab") {
       if (!this.relay) return { noTab: true };
       try {
-        return await this.relay(this.base, path);
+        let timer;
+        const late = new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ status: 0, error: "timeout" }), REQUEST_TIMEOUT_MS + 2000);
+        });
+        try {
+          return await Promise.race([this.relay(this.base, path), late]);
+        } finally {
+          clearTimeout(timer);
+        }
       } catch (e) {
         return { status: 0, error: String(e && e.message ? e.message : e) };
       }
@@ -660,8 +710,9 @@ export class LiveSource {
       this.report.via = "worker";
       return { signedIn: true, student: worker.student, via: "worker" };
     }
+    let tab = { why: "no-tab" };
     if (this.relay) {
-      const tab = await this.whoami("tab");
+      tab = await this.whoami("tab");
       session.tab = tab.signedIn ? "signed-in" : tab.why;
       if (tab.signedIn) {
         this.via = "tab";
@@ -669,7 +720,7 @@ export class LiveSource {
         return { signedIn: true, student: tab.student, via: "tab" };
       }
     }
-    return { signedIn: false, reason: session.tab === "no-tab" ? "no-tab" : "signed-out" };
+    return { signedIn: false, reason: sessionReason(worker.why, tab.why) };
   }
 
   async listCourses() {
@@ -778,6 +829,8 @@ export class LiveSource {
   async readAcross(name, route, params, failed) {
     const rows = [];
     let ok = 0;
+    // Org unit ids this route could not read.
+    const missed = new Set();
     for (const chunk of this.idChunks()) {
       const tryRead = async (ids) => {
         const q = new URLSearchParams({ orgUnitIdsCSV: ids.join(","), ...params });
@@ -794,15 +847,17 @@ export class LiveSource {
             rows.push(...(await tryRead(narrower)));
             ok++;
             failed.push(`${name}: 400 with all units, worked with current courses only`);
+            for (const id of chunk) if (!narrower.includes(id)) missed.add(id);
             continue;
           } catch (e2) {
             if (e2.code === "signed-out") throw e2;
           }
         }
         failed.push(`${name}: ${e.code}${e.status ? ` ${e.status}` : ""}`);
+        for (const id of chunk) missed.add(id);
       }
     }
-    return { rows, ok: ok > 0 };
+    return { rows, ok: ok > 0, missed };
   }
 
   /** The cross-course myItems feed (content topics and anything else with dates), read once per sync. */
@@ -811,7 +866,7 @@ export class LiveSource {
     const { le } = await this.ensureVersions();
     const { from, to } = this.window();
     const doneTo = utcDateTime(new Date(this.now.getTime() + DAY_MS));
-    const feed = { items: [], completed: new Map(), failed: [], ok: 0, activityTypes: {} };
+    const feed = { items: [], completed: new Map(), failed: [], ok: 0, missed: new Set(), activityTypes: {} };
     const range = { startDateTime: from, endDateTime: to };
     // The completions routes filter on the completion date and take different names.
     const doneRange = { completedFromDateTime: from, completedToDateTime: doneTo };
@@ -825,6 +880,7 @@ export class LiveSource {
     for (const [name, route, params] of reads) {
       const r = await this.readAcross(name, route, params, feed.failed);
       if (r.ok) feed.ok++;
+      for (const id of r.missed) feed.missed.add(id);
       got[name] = r.rows;
     }
     for (const x of [...got["completions/due"], ...got.completions]) {
@@ -855,10 +911,11 @@ export class LiveSource {
     if (this.calendar) return this.calendar;
     const { le } = await this.ensureVersions();
     const { from, to } = this.window();
-    const cal = { events: [], ok: false, perCourse: false, failed: [] };
+    const cal = { events: [], ok: false, perCourse: false, failed: [], missed: new Set() };
     const r = await this.readAcross("calendar", `/d2l/api/le/${le}/calendar/events/myEvents/`, { startDateTime: from, endDateTime: to }, cal.failed);
     cal.events = r.rows;
     cal.ok = r.ok;
+    cal.missed = r.missed;
     if (!r.ok) cal.perCourse = true;
     this.report.calendar = { ok: cal.ok, perCourse: cal.perCourse, failed: cal.failed, events: cal.events.length, range: { from, to }, eventTypes: {}, used: 0, skipped: [] };
     this.calendar = cal;
@@ -868,7 +925,8 @@ export class LiveSource {
   async calendarFor(course, le) {
     const cal = await this.ensureCalendar();
     const ou = course.orgUnitId;
-    if (!cal.perCourse) return { ok: true, events: cal.events.filter((e) => e && Number(e.OrgUnitId) === ou) };
+    // The cross-course read covered this course: use it. Otherwise ask the course itself.
+    if (!cal.perCourse && !cal.missed.has(ou)) return { ok: true, events: cal.events.filter((e) => e && Number(e.OrgUnitId) === ou) };
     const { from, to } = this.window();
     const q = new URLSearchParams({ startDateTime: from, endDateTime: to });
     try {
@@ -912,7 +970,7 @@ export class LiveSource {
         const prev = byEntity.get(key);
         // A due date beats an end date for the same item.
         if (prev && (prev.rank > RANK[type] || (prev.rank === RANK[type] && prev.dueAt >= at))) continue;
-        const row = { kind, sourceId, title, dueAt: at, url, completedAt: null, rank: RANK[type] ?? 0 };
+        const row = { kind, sourceId, title, dueAt: at, dueField: type === "due" ? "due" : type === "ends" ? "end" : "event", url, completedAt: null, rank: RANK[type] ?? 0 };
         if (prev) rows[rows.indexOf(prev)] = row;
         else rows.push(row);
         byEntity.set(key, row);
@@ -924,7 +982,7 @@ export class LiveSource {
         if (calRep && calRep.skipped.length < 12) calRep.skipped.push(String(title).slice(0, 60));
         continue;
       }
-      rows.push({ kind: "content", sourceId: `cal${ev.CalendarEventId}`, title, dueAt: at, url, completedAt: null, category: categoryFromTitle(title) });
+      rows.push({ kind: "content", sourceId: `cal${ev.CalendarEventId}`, title, dueAt: at, dueField: "event", url, completedAt: null, category: categoryFromTitle(title) });
     }
     for (const row of rows) {
       const o = opens.get(`${row.kind}:${row.sourceId}`);
@@ -981,6 +1039,7 @@ export class LiveSource {
         sourceId: String(f.Id),
         title: String(f.Name || "Dropbox folder"),
         dueAt,
+        dueField: fieldOf(f.DueDate),
         opensAt: laterOnly(isoOrNull(avail.StartDate), dueAt),
         categoryName: catNames[f.CategoryId] || "",
         completedAt: submittedAt,
@@ -1004,7 +1063,7 @@ export class LiveSource {
       const dueAt = isoOrNull(q.DueDate) || isoOrNull(q.EndDate);
       seen.sample(q.Name, { DueDate: q.DueDate ?? null, StartDate: q.StartDate ?? null, EndDate: q.EndDate ?? null }, !!dueAt);
       if (!dueAt) continue;
-      out.push({ kind: "quiz", sourceId: String(id), title: String(q.Name || "Quiz"), dueAt, opensAt: laterOnly(isoOrNull(q.StartDate), dueAt), completedAt: null });
+      out.push({ kind: "quiz", sourceId: String(id), title: String(q.Name || "Quiz"), dueAt, dueField: fieldOf(q.DueDate), opensAt: laterOnly(isoOrNull(q.StartDate), dueAt), completedAt: null });
     }
     return out;
   }
@@ -1039,13 +1098,14 @@ export class LiveSource {
       seen.sample(t.Name, { DueDate: t.DueDate ?? null, UnlockEndDate: t.UnlockEndDate ?? null, EndDate: t.EndDate ?? null }, !!dueAt);
       if (!dueAt) continue;
       const opensAt = laterOnly(isoOrNull(t.UnlockStartDate) || isoOrNull(t.StartDate), dueAt);
-      out.push({ kind: "discussion", sourceId: String(t.TopicId), title: String(t.Name || "Discussion"), dueAt, opensAt, completedAt: null });
+      out.push({ kind: "discussion", sourceId: String(t.TopicId), title: String(t.Name || "Discussion"), dueAt, dueField: fieldOf(t.DueDate), opensAt, completedAt: null });
     }
     if (failures && !out.length && failures === forums.length) {
       const err = new Error("Every discussion forum failed");
       err.code = "forums";
       throw err;
     }
+    if (failures) rep.discussionsPartial = failures;
     return out;
   }
 
@@ -1076,11 +1136,13 @@ export class LiveSource {
           category: x.category || categoryFor(x.kind, x.title, x.categoryName),
           title: x.title,
           dueAt: x.dueAt,
+          dueField: x.dueField || null,
           url: x.url || itemUrl(this.base, ou, x.kind, x.sourceId),
           status: x.completedAt ? "submitted" : "open",
           completedAt: x.completedAt || null,
           moved: null,
           srcs: new Set([src]),
+          seen: new Set([source]),
         };
         if (x.opensAt) item.opensAt = x.opensAt;
         byKey.set(key, item);
@@ -1089,6 +1151,7 @@ export class LiveSource {
       }
       if (src === "tool" && !found.srcs.has("tool")) {
         found.dueAt = x.dueAt;
+        found.dueField = x.dueField || null;
         found.category = categoryFor(x.kind, x.title, x.categoryName);
         found.title = x.title;
       } else if (src === "feed" && x.url) found.url = x.url;
@@ -1098,22 +1161,28 @@ export class LiveSource {
         found.completedAt = x.completedAt;
       }
       found.srcs.add(src);
+      found.seen.add(source);
       byKey.set(key, found);
     };
 
     let okCount = 0;
     let failCount = 0;
+    const sourcesOk = [];
+    let source = "";
     const tools = [
       ["dropbox", () => this.readDropbox(course, le, rep)],
       ["quizzes", () => this.readQuizzes(course, le, rep)],
       ["discussions", () => this.readDiscussions(course, le, rep)],
     ];
+    rep.discussionsPartial = 0;
     for (const [name, run] of tools) {
       try {
         const rows = await run();
+        source = name;
         rows.forEach((x) => add(x, "tool"));
         rep.tools[name] = rows.length;
         okCount++;
+        if (!(name === "discussions" && rep.discussionsPartial)) sourcesOk.push(name);
       } catch (e) {
         if (e.code === "signed-out") throw e;
         rep.tools[name] = `failed: ${e.code || e.message}`;
@@ -1122,6 +1191,7 @@ export class LiveSource {
     }
 
     const feed = await this.ensureFeed();
+    source = "feed";
     let fromFeed = 0;
     for (const x of feed.items) {
       if (Number(x.OrgUnitId) !== ou || x.IsExempt === true) continue;
@@ -1136,6 +1206,7 @@ export class LiveSource {
           sourceId,
           title: String(x.ItemName || "Learn item"),
           dueAt,
+          dueField: fieldOf(x.DueDate),
           opensAt: laterOnly(isoOrNull(x.StartDate), dueAt),
           url,
           completedAt: feed.completed.get(`${x.OrgUnitId}:${x.ItemId}`) || null,
@@ -1150,6 +1221,7 @@ export class LiveSource {
 
     const cal = await this.calendarFor(course, le);
     if (cal.ok) {
+      source = "calendar";
       const { rows, opens } = this.calendarRows(cal.events, rep);
       rows.forEach((x) => add(x, "calendar"));
       // A start event for an item another source found.
@@ -1169,8 +1241,17 @@ export class LiveSource {
       err.code = "course-failed";
       throw err;
     }
+    const okSources = new Set(sourcesOk);
+    if (feed.ok && !feed.missed.has(ou)) okSources.add("feed");
+    if (cal.ok) okSources.add("calendar");
+    this.readOk.set(course.id, okSources);
+    rep.readOk = [...okSources];
     const items = dropEchoes([...new Set(byKey.values())]);
-    for (const i of items) delete i.srcs;
+    for (const i of items) {
+      i.seenIn = [...i.seen];
+      delete i.srcs;
+      delete i.seen;
+    }
     rep.items = items.length;
     rep.submitted = items.filter((i) => i.status === "submitted").length;
     return items;
@@ -1188,6 +1269,51 @@ export class LiveSource {
     if (rep) rep.termless = upcoming.length ? `kept, ${upcoming.length} upcoming` : "dropped, nothing upcoming";
     if (!upcoming.length) return null;
     return items.filter((i) => Date.parse(i.dueAt) >= now - 14 * DAY_MS);
+  }
+
+  /**
+   * Asks Learn whether one dropbox folder or quiz is handed in, right before a
+   * reminder goes out. Tries the worker first, then an open Learn tab.
+   * Resolves to { submitted: true, at } or { submitted: false }, or null when
+   * Learn could not be asked (the reminder then goes out anyway).
+   */
+  async submissionState(item) {
+    const [ouText, kind, ...rest] = String(item.id || "").split(":");
+    const ou = Number(ouText);
+    const sourceId = rest.join(":");
+    if (!ou || !/^\d+$/.test(sourceId) || (kind !== "dropbox" && kind !== "quiz")) return null;
+    const vias = this.relay ? ["worker", "tab"] : ["worker"];
+    for (const via of vias) {
+      try {
+        const { le } = await this.ensureVersions(via);
+        if (kind === "dropbox") {
+          const subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${sourceId}/submissions/mysubmissions/`, { via }));
+          const dates = [];
+          for (const x of subs) {
+            for (const y of x && Array.isArray(x.Submissions) ? x.Submissions : [x]) if (y) dates.push(isoOrNull(y.SubmissionDate) || new Date().toISOString());
+          }
+          return dates.length ? { submitted: true, at: dates.sort().pop() } : { submitted: false };
+        }
+        // Quizzes: Learn's completions feed for this one course.
+        const { from } = this.window();
+        const q = new URLSearchParams({ orgUnitIdsCSV: String(ou), completedFromDateTime: from, completedToDateTime: utcDateTime(Date.now() + DAY_MS) });
+        const rows = [];
+        for (const route of ["completions/due/", "completions/"]) {
+          const page = await this.api(`/d2l/api/le/${le}/content/myItems/${route}?${q}`, { via });
+          rows.push(...listOf(page));
+        }
+        const hit = rows.find((x) => {
+          if (!x || Number(x.OrgUnitId) !== ou) return false;
+          const id = toolIdFromUrl("quiz", absolute(this.base, x.ItemUrl));
+          return id ? id === sourceId : norm(x.ItemName) === norm(item.title);
+        });
+        if (!hit) return { submitted: false };
+        return { submitted: true, at: isoOrNull(hit.DateCompleted) || isoOrNull(hit.CompletionDate) || new Date().toISOString() };
+      } catch (e) {
+        this.report.notes.push(`submission check via ${via} failed (${e.code || "error"})`);
+      }
+    }
+    return null;
   }
 
   /** Called by the background once a sync ends. */
