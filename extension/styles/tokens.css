@@ -1,0 +1,234 @@
+/*
+  WATnow design tokens. Source of truth for the extension and the landing page.
+  extension/styles/tokens.css is a copy of this file (Chrome extensions cannot
+  load files outside their own folder). Run `node scripts/sync-tokens.mjs` after
+  editing, or copy the file by hand.
+
+  Direction: a course outline after a student has gone over every date with a
+  highlighter. Cool copier paper, graphite ink, fluorescent highlighter fills,
+  a red pen for late and struck-out dates.
+
+  Font paths below are relative to this file. Both design/fonts and
+  extension/fonts hold the same Archivo file.
+*/
+
+@font-face {
+  font-family: "Archivo";
+  src: url("../fonts/archivo-latin-wdth-wght.woff2") format("woff2");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+
+  /* ---------- Primitives ---------- */
+  --graphite-950: #141519;
+  --graphite-900: #17181c;
+  --graphite-800: #23252a;
+  --graphite-700: #2e3036;
+  --graphite-600: #494c53;
+  --graphite-500: #5e626b;
+  --graphite-400: #8a8e96;
+  --graphite-300: #a2a5ac;
+  --graphite-200: #cfd1cc;
+  --graphite-150: #dcdeda;
+  --graphite-100: #e8e9e5;
+  --graphite-50: #f4f5f2;
+  --white: #ffffff;
+
+  --yellow-400: #ffe45c; /* brand highlighter */
+  --yellow-500: #f5cf1b; /* highlighter edge, pressed state */
+  --yellow-600: #8a6d00; /* yellow used as text on paper, 4.9:1 */
+
+  --red-pen-600: #bf2f27;
+  --red-pen-300: #ff8a7a;
+  --green-pen-600: #2c7449;
+  --green-pen-300: #7ed39b;
+
+  /* Course highlighters. Always carry ink text on top; never used as text. */
+  --hl-pink: #ffa3cb;
+  --hl-green: #95e3ad;
+  --hl-orange: #ffbd73;
+  --hl-blue: #94cfff;
+  --hl-violet: #cdb6ff;
+  --hl-mint: #8fe0d6;
+
+  /* ---------- Semantic roles (light) ---------- */
+  --paper: var(--graphite-50);          /* page and panel ground */
+  --sheet: var(--white);                /* raised surfaces: menus, inputs, options cards */
+  --sheet-hover: #eceee9;               /* row hover on paper */
+  --ink: var(--graphite-900);           /* primary text, icons */
+  --ink-muted: var(--graphite-500);     /* secondary text, 5.6:1 on paper */
+  --ink-faint: var(--graphite-400);     /* disabled text, never for content */
+  --rule: var(--graphite-150);          /* hairlines between rows */
+  --rule-strong: var(--graphite-200);   /* control borders */
+
+  --accent: var(--yellow-400);          /* primary action fill, highlight swipe */
+  --accent-press: var(--yellow-500);
+  --on-accent: var(--graphite-900);
+  --accent-text: var(--yellow-600);
+
+  --selected: var(--graphite-900);      /* selected filter chip */
+  --on-selected: var(--graphite-50);
+
+  --late: var(--red-pen-600);           /* overdue, closing soon, strike-through */
+  --late-wash: #fbe3e0;
+  --done: var(--green-pen-600);         /* submitted check */
+  --focus: var(--graphite-900);
+
+  --chip-ink: var(--graphite-900);      /* text on any highlighter fill */
+  --chip-done-opacity: 0.55;
+
+  --shadow-lift: 0 1px 2px rgba(20, 21, 25, 0.08), 0 10px 28px -8px rgba(20, 21, 25, 0.28);
+  --shadow-menu: 0 1px 2px rgba(20, 21, 25, 0.06), 0 16px 40px -12px rgba(20, 21, 25, 0.24);
+
+  /* ---------- Type ---------- */
+  --font: "Archivo", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --stretch-ui: 100%;
+  --stretch-heading: 112%;
+  --stretch-display: 125%;
+
+  /* Fixed rem scale for product UI (1.125 to 1.2 steps). Base 16px. */
+  --text-xs: 0.8125rem;   /* 13px, smallest allowed; meta that is also carried elsewhere */
+  --text-sm: 0.875rem;    /* 14px, meta lines, captions */
+  --text-md: 1rem;        /* 16px, item titles, body */
+  --text-lg: 1.125rem;    /* 18px, section headings in options */
+  --text-xl: 1.375rem;    /* 22px, panel verdict */
+  --text-2xl: 1.75rem;    /* 28px, options page title */
+  /* Display scale for the landing page, fluid there only. */
+  --text-display-sm: clamp(2.25rem, 1.6rem + 2.8vw, 3.5rem);
+  --text-display: clamp(2.75rem, 1.6rem + 5vw, 5.75rem);
+
+  --leading-tight: 1.15;
+  --leading-snug: 1.3;
+  --leading-body: 1.5;
+
+  --weight-regular: 430;
+  --weight-medium: 540;
+  --weight-semibold: 620;
+  --weight-bold: 720;
+  --weight-black: 820;
+
+  --tracking-display: -0.025em;
+  --tracking-heading: -0.012em;
+  --tracking-ui: 0;
+
+  /* ---------- Radii: small and squared, like cut paper ---------- */
+  --radius-xs: 2px;    /* highlighter chips (paired with the chisel clip) */
+  --radius-sm: 6px;    /* buttons, inputs, row hover */
+  --radius-md: 10px;   /* menus, option groups */
+  --radius-lg: 16px;   /* landing page device frames only */
+  --radius-icon: 22%;  /* app icon squircle, relative */
+
+  /* Chisel-tip clip for highlighter chips and swipes */
+  --chisel: polygon(3px 0, 100% 0, calc(100% - 3px) 100%, 0 100%);
+
+  /* ---------- Spacing (4px base) ---------- */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-7: 24px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 56px;
+  --space-11: 80px;
+  --space-12: 120px;
+
+  --gutter-panel: 16px;
+  --target-min: 40px;
+
+  /* ---------- Motion ---------- */
+  --dur-instant: 90ms;
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 360ms;
+  --dur-focal: 680ms;
+  --dur-swipe: 460ms;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);        /* arrivals */
+  --ease-in: cubic-bezier(0.55, 0, 0.75, 0.2);       /* exits */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);     /* travel between positions */
+  --ease-swipe: cubic-bezier(0.3, 0.6, 0.15, 1);     /* highlighter and pen strokes */
+}
+
+/* ---------- Dark: a desk lamp over the same page ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #1f2023;            /* matches Chrome's dark side panel frame */
+    --sheet: #28292d;
+    --sheet-hover: #2a2b30;
+    --ink: #ecede9;
+    --ink-muted: #a2a5ac;
+    --ink-faint: #6f727a;
+    --rule: #323339;
+    --rule-strong: #43454c;
+    --accent: var(--yellow-400);
+    --accent-press: var(--yellow-500);
+    --on-accent: var(--graphite-900);
+    --accent-text: var(--yellow-400);
+    --selected: #ecede9;
+    --on-selected: #1f2023;
+    --late: var(--red-pen-300);
+    --late-wash: #3a2624;
+    --done: var(--green-pen-300);
+    --focus: var(--yellow-400);
+    --chip-done-opacity: 0.5;
+    --hl-pink: #f79bc3;
+    --hl-green: #8ad9a3;
+    --hl-orange: #f7b56b;
+    --hl-blue: #8cc6f5;
+    --hl-violet: #c4adf7;
+    --hl-mint: #87d6cc;
+    --shadow-lift: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 30px -8px rgba(0, 0, 0, 0.7);
+    --shadow-menu: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 44px -12px rgba(0, 0, 0, 0.7);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #1f2023;
+  --sheet: #28292d;
+  --sheet-hover: #2a2b30;
+  --ink: #ecede9;
+  --ink-muted: #a2a5ac;
+  --ink-faint: #6f727a;
+  --rule: #323339;
+  --rule-strong: #43454c;
+  --accent: var(--yellow-400);
+  --accent-press: var(--yellow-500);
+  --on-accent: var(--graphite-900);
+  --accent-text: var(--yellow-400);
+  --selected: #ecede9;
+  --on-selected: #1f2023;
+  --late: var(--red-pen-300);
+  --late-wash: #3a2624;
+  --done: var(--green-pen-300);
+  --focus: var(--yellow-400);
+  --chip-done-opacity: 0.5;
+  --hl-pink: #f79bc3;
+  --hl-green: #8ad9a3;
+  --hl-orange: #f7b56b;
+  --hl-blue: #8cc6f5;
+  --hl-violet: #c4adf7;
+  --hl-mint: #87d6cc;
+  --shadow-lift: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 30px -8px rgba(0, 0, 0, 0.7);
+  --shadow-menu: 0 1px 2px rgba(0, 0, 0, 0.4), 0 18px 44px -12px rgba(0, 0, 0, 0.7);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur-base: 120ms;
+    --dur-slow: 120ms;
+    --dur-focal: 1ms;
+    --dur-swipe: 1ms;
+  }
+}

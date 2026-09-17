@@ -1,0 +1,62 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_appName__",
+  "short_name": "__MSG_appName__",
+  "description": "__MSG_appDescription__",
+  "version": "1.0.0",
+  "default_locale": "en",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "__MSG_actionTitle__",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "panel/panel.html"
+  },
+  "options_page": "options/options.html",
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "permissions": ["sidePanel", "storage", "notifications", "alarms"],
+  "host_permissions": [
+    "https://learn.uwaterloo.ca/*",
+    "http://localhost:8080/*",
+    "http://127.0.0.1:8080/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://learn.uwaterloo.ca/*",
+        "http://localhost:8080/d2l/*",
+        "http://127.0.0.1:8080/d2l/*"
+      ],
+      "js": ["src/content/learn-bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "commands": {
+    "demo-move-date": {
+      "suggested_key": { "default": "Alt+Shift+M" },
+      "description": "Demo: a prof moves a due date"
+    },
+    "demo-reminder": {
+      "suggested_key": { "default": "Alt+Shift+K" },
+      "description": "Demo: send a reminder for something closing soon"
+    },
+    "demo-reset": {
+      "suggested_key": { "default": "Alt+Shift+0" },
+      "description": "Demo: reset to before the first scan"
+    }
+  }
+}
