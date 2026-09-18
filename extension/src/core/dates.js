@@ -85,8 +85,6 @@ export function fmtDueDay(due, now) {
   if (diff === 0) return "Today";
   if (diff === 1) return "Tomorrow";
   if (diff === -1) return "Yesterday";
-  const inThisWeek = new Date(due) <= endOfWeek(now) && diff > 0;
-  if (inThisWeek) return DAYS[new Date(due).getDay()];
   return fmtDate(due);
 }
 

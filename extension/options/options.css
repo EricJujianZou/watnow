@@ -10,9 +10,21 @@
   gap: 16px;
 }
 
-.page-head .brand-mark {
-  width: 48px;
-  height: 48px;
+.page-head .mark-tile {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--tile);
+  box-shadow: var(--clay-sm);
+}
+
+.page-head .mark-tile .brand-mark {
+  width: 100%;
+  height: 100%;
 }
 
 .page-head h1 {
@@ -31,23 +43,11 @@
 }
 
 .sheet {
-  margin-top: 28px;
-  padding: 6px 28px 8px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius-md);
-  background: var(--sheet);
+  margin-top: 24px;
 }
 
-.sheet > .set-section:first-child {
-  padding-top: 24px;
-}
-
-.sheet .settings {
-  padding: 0;
-}
-
-.sheet .settings .set-section:last-child {
-  border-bottom: 0;
+.sheet .set-section {
+  padding: 24px 28px 26px;
 }
 
 .demo-list {
@@ -61,8 +61,11 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px 24px;
-  padding: 18px 0;
-  border-top: 1px solid var(--rule);
+  margin-top: 12px;
+  padding: 16px 18px;
+  border-radius: var(--radius-md);
+  background: var(--tile);
+  box-shadow: var(--clay-sm);
 }
 
 .demo-row h3 {
@@ -92,13 +95,13 @@
 kbd {
   display: inline-grid;
   place-items: center;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 7px;
-  border: 1px solid var(--rule-strong);
-  border-bottom-width: 2px;
-  border-radius: 5px;
-  background: var(--paper);
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--slab);
+  box-shadow: var(--groove);
   color: var(--ink);
   font-family: var(--font);
   font-size: var(--text-xs);
@@ -140,12 +143,13 @@ kbd {
 
 .radio input {
   appearance: none;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   margin: 1px 0 0;
-  border: 1.75px solid var(--rule-strong);
+  border: 0;
   border-radius: 50%;
-  background: var(--sheet);
+  background: var(--tile);
+  box-shadow: var(--groove);
   display: grid;
   place-items: center;
 }
@@ -155,14 +159,13 @@ kbd {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--selected);
+  background: var(--accent);
+  box-shadow: var(--clay-yellow);
   transform: scale(0);
   transition: transform var(--dur-base) var(--ease-out);
 }
 
-.radio input:checked {
-  border-color: var(--selected);
-}
+
 
 .radio input:checked::after {
   transform: scale(1);
@@ -215,8 +218,8 @@ kbd {
   .page {
     padding: 28px 16px 56px;
   }
-  .sheet {
-    padding: 4px 16px 8px;
+  .sheet .set-section {
+    padding: 20px 18px 22px;
   }
   .demo-row {
     grid-template-columns: 1fr;

@@ -1,5 +1,5 @@
-import { getSettings, setSettings, getState } from "../src/core/store.js";
-import { mountSettings, applyTheme } from "../src/ui/settings-view.js";
+import { getSettings, setSettings } from "../src/core/store.js";
+import { applyTheme } from "../src/ui/settings-view.js";
 import { DEMO_SCRIPT, COURSES, ITEMS } from "../src/data/fixtures.js";
 import { brandMark, esc } from "../src/ui/icons.js";
 import { fmtAgo } from "../src/core/dates.js";
@@ -63,8 +63,7 @@ function debugSummary(report) {
 async function render() {
   const settings = await getSettings();
   applyTheme(settings.theme);
-  document.title = `${APP} settings`;
-  const state = await getState();
+  document.title = "Report a Bug";
   const { liveDebug } = await chrome.storage.local.get("liveDebug");
   let commands = [];
   try {
@@ -94,10 +93,9 @@ async function render() {
 
   page.innerHTML = `
     <header class="page-head">
-      ${brandMark(48)}
+      <span class="mark-tile">${brandMark(40)}</span>
       <div>
-        <h1>${esc(APP)} settings</h1>
-        <p>${TESTER_BUILD ? "Reminders and privacy for the side panel, plus a debug report for the developer." : "Reminders and privacy for the side panel, plus controls for recording the demo."}</p>
+        <h1>Report a Bug</h1>
       </div>
     </header>
 
@@ -142,8 +140,8 @@ async function render() {
 
     <div class="sheet">
       <section class="set-section" aria-labelledby="dbg-h">
-        <h2 id="dbg-h">${TESTER_BUILD ? "Debug report" : "Live mode check"}</h2>
-        <p class="set-help">After WATnow reads Learn, copy this report and paste it into a message to the developer. It lists each request WATnow sent to Learn, whether it worked, and which fields came back. Your name, email, student number and Learn username are left out.</p>
+        <h2 id="dbg-h" class="sr-only">Debug report</h2>
+        <p class="set-help">Send a debug report to Eric and he will buy you a coffee. Your Learn info is not in the report (you can check it first by pasting it somewhere and ctrl+f your info).</p>
         <p class="set-help" data-debug-summary>${esc(debugSummary(liveDebug))}</p>
         <div class="row-actions" style="margin-top:12px">
           <button class="btn btn-primary btn-sm" data-act="copy-debug" ${liveDebug ? "" : "disabled"}>Copy debug info</button>
@@ -153,10 +151,7 @@ async function render() {
       </section>
     </div>
 
-    <div class="sheet" id="settings-mount"></div>
     <p class="page-foot">Not affiliated with D2L or the University of Waterloo.</p>`;
-
-  await mountSettings(document.getElementById("settings-mount"), { courses: state.courses, context: "options" });
 }
 
 page.addEventListener("click", async (e) => {
@@ -224,11 +219,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (btn) btn.disabled = !changes.liveDebug.newValue;
   }
   if (area === "local" && changes.settings && changes.settings.newValue) applyTheme(changes.settings.newValue.theme);
-  if (area === "local" && changes.state) {
-    const before = changes.state.oldValue;
-    const after = changes.state.newValue;
-    if (after && (!before || (before.courses || []).length !== (after.courses || []).length)) render();
-  }
 });
 
 render();

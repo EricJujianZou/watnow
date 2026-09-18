@@ -4,10 +4,18 @@
 
 import { HOUR, DAY, dayDiff, fmtTime, fmtWeekday, fmtDate, fmtUntil, sameDay } from "./dates.js";
 
+// The reminder slider, left to right: 7 days before down to 1 day before, then
+// the morning of the due day. "2h" is not on the slider any more but the engine
+// still honours it, so older saved settings keep working.
 export const LEADS = [
-  { id: "2d", label: "2 days before" },
-  { id: "morning", label: "Morning of" },
-  { id: "2h", label: "2 hours before" },
+  { id: "7d", label: "7 days before", short: "7" },
+  { id: "6d", label: "6 days before", short: "6" },
+  { id: "5d", label: "5 days before", short: "5" },
+  { id: "4d", label: "4 days before", short: "4" },
+  { id: "3d", label: "3 days before", short: "3" },
+  { id: "2d", label: "2 days before", short: "2" },
+  { id: "1d", label: "1 day before", short: "1" },
+  { id: "morning", label: "Morning of (bro pls rethink your decisions \u{1F62D})", short: "morning of" },
 ];
 
 export const REMINDER_TYPES = [
@@ -26,33 +34,16 @@ export function fmtHour(h) {
 
 function leadTime(leadId, due) {
   const d = new Date(due);
-  if (leadId === "2d") return new Date(d.getTime() - 2 * DAY);
-  if (leadId === "2h") return new Date(d.getTime() - 2 * HOUR);
   if (leadId === "morning") {
     const m = new Date(d);
     m.setHours(8, 0, 0, 0);
     return m;
   }
+  const days = /^(\d+)d$/.exec(leadId);
+  if (days) return new Date(d.getTime() - Number(days[1]) * DAY);
+  const hours = /^(\d+)h$/.exec(leadId);
+  if (hours) return new Date(d.getTime() - Number(hours[1]) * HOUR);
   return null;
-}
-
-export function inQuietHours(date, settings) {
-  const { quietStart, quietEnd } = settings.reminders;
-  const h = date.getHours() + date.getMinutes() / 60;
-  if (quietStart === quietEnd) return false;
-  if (quietStart > quietEnd) return h >= quietStart || h < quietEnd;
-  return h >= quietStart && h < quietEnd;
-}
-
-/** Move a time that falls in quiet hours to 30 minutes before quiet hours start. */
-export function outOfQuietHours(date, settings) {
-  if (!inQuietHours(date, settings)) return date;
-  const { quietStart } = settings.reminders;
-  const x = new Date(date);
-  const beforeStart = x.getHours() + x.getMinutes() / 60 >= quietStart;
-  if (!beforeStart) x.setDate(x.getDate() - 1);
-  x.setHours(0, quietStart * 60 - 30, 0, 0);
-  return x;
 }
 
 /**
@@ -64,14 +55,14 @@ export function plannedReminders(items, settings, now = new Date()) {
   const out = [];
   for (const item of items) {
     if (item.status !== "open" || muted.has(item.courseId)) continue;
+    if ((settings.reminders.offTypes || []).includes(item.category)) continue;
     const due = new Date(item.dueAt);
     if (due <= now) continue;
     const leads = settings.reminders.leads[item.category] || [];
     const seen = new Set();
     for (const lead of leads) {
-      const raw = leadTime(lead, due);
-      if (!raw) continue;
-      const fireAt = raw;
+      const fireAt = leadTime(lead, due);
+      if (!fireAt) continue;
       if (fireAt >= due) continue;
       const stamp = Math.round(fireAt.getTime() / 60000);
       if (seen.has(stamp)) continue;

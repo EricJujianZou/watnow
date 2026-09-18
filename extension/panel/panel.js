@@ -1,6 +1,6 @@
 import { getState, getSettings, getFilter, setFilter, emptyState } from "../src/core/store.js";
 import { buildModel } from "../src/core/model.js";
-import { fmtAgo, fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
+import { fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
 import { icon, brandMark, esc, CATEGORY_ICON } from "../src/ui/icons.js";
 import { mountSettings, applyTheme } from "../src/ui/settings-view.js";
 import { liveBase } from "../src/data/live-source.js";
@@ -55,18 +55,17 @@ function renderBar() {
   if (PREVIEW) status = "";
   else if (scan === "running") status = `<span class="bar-status">Reading Learn</span>`;
   else if (state.syncing) status = `<span class="bar-status">Checking Learn</span>`;
-  else if (scan === "done" && state.lastSyncAt && !state.stale) status = `<span class="bar-status">Updated ${fmtAgo(state.lastSyncAt, new Date())}</span>`;
   const busy = scan === "running" || state.syncing;
   const refresh =
     PREVIEW || (scan !== "done" && !busy)
       ? ""
       : `<button class="icon-btn" data-act="refresh" aria-label="${busy ? "Reading Learn" : "Check Learn for changes"}" ${busy ? "disabled" : ""}>${icon("refresh", 20, busy ? "spin" : "")}</button>`;
   bar.innerHTML = `
-    <div class="brand">${brandMark(22)}<span class="brand-name">${esc(APP)}</span></div>
+    <div class="brand"><span class="mark-tile">${brandMark(24)}</span><span class="brand-name">${esc(APP)}</span></div>
     <span class="spacer"></span>
     ${status}
     ${refresh}
-    <button class="icon-btn" data-act="settings" aria-label="Reminders and settings">${icon("sliders")}</button>`;
+    <button class="icon-btn" data-act="settings" aria-label="Reminders and settings">${icon("gear")}</button>`;
 }
 
 window.addEventListener("scroll", () => bar.classList.toggle("is-scrolled", window.scrollY > 4), { passive: true });
@@ -83,10 +82,7 @@ function scanCopy() {
   const handed = state.items.filter((i) => i.status !== "open").length;
   const courses = state.courses.length;
   return done
-    ? {
-        title: `Found ${total} ${total === 1 ? "deadline" : "deadlines"} across ${courses} ${courses === 1 ? "course" : "courses"}`,
-        sub: `${handed} ${handed === 1 ? "is" : "are"} already handed in. The rest are sorted by due date.`,
-      }
+    ? { title: "Done reading Learn", sub: "Opening your deadlines." }
     : { title: "Reading your courses on Learn", sub: "WATnow uses the Learn session that's already signed in on this browser." };
 }
 
@@ -105,10 +101,11 @@ function renderScan() {
   if (!root) {
     app.innerHTML = `
       <section class="scan" aria-busy="true">
-        <h1 class="scan-h"></h1>
-        <p class="scan-sub"></p>
-        <ol class="scan-list"></ol>
-        <div class="scan-actions"></div>
+        <div class="scan-card">
+          <h1 class="scan-h"></h1>
+          <p class="scan-sub"></p>
+          <ol class="scan-list"></ol>
+        </div>
         <p class="privacy">${icon("lock", 18)}<span>WATnow never sees your Learn password. What it reads stays on this computer.</span></p>
       </section>`;
     root = app.querySelector(".scan");
@@ -142,7 +139,7 @@ function renderScan() {
       list.innerHTML = sc.courses
         .map((p) => {
           const c = state.courses.find((x) => x.id === p.courseId) || { code: "", name: "", color: "mint" };
-          return `<li class="scan-row hl-${c.color}" data-course="${c.id}" data-status="waiting"><span class="scan-fill" aria-hidden="true"></span><span class="chip">${esc(c.code)}</span><span class="scan-name">${esc(c.name)}</span><span class="scan-state">Waiting</span></li>`;
+          return `<li class="scan-row hl-${c.color}" data-course="${c.id}" data-status="waiting"><span class="scan-fill" aria-hidden="true"></span><span class="chip">${esc(c.code)}</span>${c.name ? `<span class="scan-name">${esc(c.name)}</span>` : ""}<span class="scan-state">Waiting</span></li>`;
         })
         .join("");
     }
@@ -166,13 +163,7 @@ function renderScan() {
     });
   }
 
-  const actions = root.querySelector(".scan-actions");
-  if (sc.status === "done") {
-    root.setAttribute("aria-busy", "false");
-    if (!actions.firstChild) actions.innerHTML = `<button class="btn btn-primary" data-act="see-list">See deadlines</button>`;
-  } else {
-    actions.innerHTML = "";
-  }
+  if (sc.status === "done") root.setAttribute("aria-busy", "false");
 }
 
 /* ------------------------------------------------------------------ */
@@ -199,13 +190,17 @@ function rowHTML(r) {
         <span class="title">${esc(r.title)}</span>
         ${moved}
       </span>
-      <span class="due"><span class="due-top">${topIcon}<span>${esc(r.top)}</span></span><span class="due-bottom">${esc(r.bottom)}</span></span>
+      <span class="due">
+        <span class="due-top">${topIcon}<span>${esc(r.top)}</span></span>
+        ${r.dateNote ? `<span class="due-bottom">${esc(r.dateNote)}</span>` : ""}
+        <span class="due-bottom"><span class="due-time${r.timeOdd ? " is-odd" : ""}">${esc(r.time)}</span></span>
+      </span>
     </button>
   </li>`;
 }
 
 function groupHTML(g) {
-  const head = `<span class="gh-title">${esc(g.label)}</span>${g.subtitle ? `<span class="gh-sub">${esc(g.subtitle)}</span>` : ""}<span class="gh-count">${g.rows.length}</span>`;
+  const head = `<span class="gh-title">${esc(g.label)}</span>${g.subtitle ? `<span class="gh-sub">${esc(g.subtitle)}</span>` : ""}`;
   const rows = g.rows.map(rowHTML).join("");
   if (g.id === "earlier") {
     return `<details class="group" data-group="earlier" ${earlierOpen ? "open" : ""}>
@@ -241,7 +236,7 @@ function renderList() {
 
   const empty =
     m.filterCourse && m.openInFilter === 0
-      ? `<div class="empty" data-flip="empty">${icon("check", 22)}<h2>Nothing left to hand in for ${esc(m.filterCourse.code)}.</h2><p>${
+      ? `<div class="empty" data-flip="empty">${icon("check", 22)}<h2>Nothing to hand in for ${esc(m.filterCourse.code)}.</h2><p>${
           m.groups.some((g) => g.id === "earlier") ? "Anything you already handed in is under Handed in earlier." : "New items show up here when your prof posts them on Learn."
         }</p></div>`
       : "";
@@ -250,15 +245,14 @@ function renderList() {
     <div class="list-view">
       ${staleHTML(now)}
       <section class="verdict" data-flip="verdict">
-        <h1 class="verdict-h">${esc(m.verdict.headline)}</h1>
+        <h1 class="verdict-h"><span>${esc(m.verdict.line1)}</span>${m.verdict.sleepy ? icon("zzz", 22) : ""}</h1>
+        ${m.verdict.line2 ? `<p class="verdict-sub">${esc(m.verdict.line2)}</p>` : ""}
         ${m.verdict.detail ? `<p class="late-line">${icon("alert", 18)}<span>${esc(m.verdict.detail)}</span></p>` : ""}
       </section>
       <div class="filters" role="group" aria-label="Show deadlines for" data-flip="filters">${chips}</div>
-      <p class="trust" data-flip="trust">${icon("checklist", 16)}<span>${esc(m.trust)}</span></p>
       ${empty}
       <div class="groups">${m.groups.map(groupHTML).join("")}</div>
       <footer class="foot" data-flip="foot">
-        <p>WATnow reads Learn using the session that's already signed in on this browser. Your deadlines stay on this computer.</p>
         <p>Not affiliated with D2L or the University of Waterloo.</p>
       </footer>
     </div>`;
@@ -330,7 +324,7 @@ function ensureVisible(el, ratio = 0.38, duration = 460) {
 
 function flashEnter() {
   if (reduced()) return;
-  const items = [...app.querySelectorAll(".verdict, .filters, .trust, .group-head, .row")].slice(0, 16);
+  const items = [...app.querySelectorAll(".verdict, .filters, .group-head, .row")].slice(0, 16);
   items.forEach((el, i) => {
     el.classList.add("enter");
     el.style.animationDelay = `${Math.min(i * 30, 420)}ms`;
@@ -472,6 +466,42 @@ function doneKind() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Scan to dashboard sweep                                             */
+/* ------------------------------------------------------------------ */
+
+// Two yellow lines run in from the top and the bottom edges, wiping the scan
+// away to the panel background. They meet in the middle, the dashboard is
+// built behind them, then they run back out and uncover it.
+const SWEEP_IN = 340;
+const SWEEP_HOLD = 90;
+const SWEEP_OUT = 420;
+
+async function sweepTo(render) {
+  if (reduced()) {
+    render();
+    return;
+  }
+  const el = document.createElement("div");
+  el.className = "sweep";
+  el.setAttribute("aria-hidden", "true");
+  el.innerHTML = `<div class="sweep-half sweep-top"><span class="sweep-line"></span></div><div class="sweep-half sweep-bottom"><span class="sweep-line"></span></div>`;
+  document.body.appendChild(el);
+  const halves = [...el.querySelectorAll(".sweep-half")];
+  const run = (from, to, duration, easing) =>
+    Promise.all(
+      halves.map((h) => h.animate([{ height: from }, { height: to }], { duration, easing, fill: "forwards" }).finished.catch(() => {}))
+    );
+  try {
+    await run("0px", "50vh", SWEEP_IN, EASE_IN_OUT);
+    render();
+    await sleep(SWEEP_HOLD);
+    await run("50vh", "0px", SWEEP_OUT, "cubic-bezier(0.16, 1, 0.3, 1)");
+  } finally {
+    el.remove();
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* Routing                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -586,7 +616,8 @@ function onState(next) {
       renderScan();
       if (prev.scan.status !== "done") {
         clearTimeout(advanceTimer);
-        advanceTimer = setTimeout(() => enqueue(() => showList({ entrance: true })), 2800);
+        // Long enough for the last course row to finish filling in, no longer.
+        advanceTimer = setTimeout(() => enqueue(() => sweepTo(() => showList({ entrance: true }))), 1000);
       }
     } else {
       showList();
@@ -630,9 +661,6 @@ app.addEventListener("click", (e) => {
       break;
     case "open":
       send("item:open", { itemId: t.dataset.id });
-      break;
-    case "see-list":
-      enqueue(() => showList({ entrance: true }));
       break;
     case "retry":
       send("panel:rescan");

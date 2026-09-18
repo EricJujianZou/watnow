@@ -6,6 +6,8 @@ const P = {
   quiz: '<rect x="3.5" y="3.5" width="13" height="13" rx="2"/><path d="M6.6 8.1l1.2 1.2 2.2-2.3"/><path d="M11.8 8.2h1.9"/><path d="M6.6 12.9h1.9"/><path d="M11.8 12.9h1.9"/>',
   discussion: '<path d="M3.5 5.3a1.8 1.8 0 0 1 1.8-1.8h6.4a1.8 1.8 0 0 1 1.8 1.8v3.9a1.8 1.8 0 0 1-1.8 1.8H7.6L4.9 13.2V11a1.8 1.8 0 0 1-1.4-1.8z"/><path d="M15.8 8.3a1.7 1.7 0 0 1 .7 1.4v3.6a1.7 1.7 0 0 1-1.2 1.6v2l-2.5-2h-3a1.7 1.7 0 0 1-1.4-.8"/>',
   doc: '<path d="M5.5 3.5h5.8l3.2 3.2v8a1.8 1.8 0 0 1-1.8 1.8H5.5a1.8 1.8 0 0 1-1.8-1.8V5.3a1.8 1.8 0 0 1 1.8-1.8z"/><path d="M11 3.7V7h3.3"/><path d="M6.8 10.5h5.4"/><path d="M6.8 13.3h3.6"/>',
+  gear: '<circle cx="10" cy="10" r="2.6"/><path d="M15.9 12a1.3 1.3 0 0 0 .26 1.44l.05.05a1.6 1.6 0 1 1-2.26 2.26l-.05-.05a1.3 1.3 0 0 0-1.44-.26 1.3 1.3 0 0 0-.79 1.19v.14a1.6 1.6 0 0 1-3.2 0v-.07a1.3 1.3 0 0 0-.85-1.19 1.3 1.3 0 0 0-1.44.26l-.05.05a1.6 1.6 0 1 1-2.26-2.26l.05-.05a1.3 1.3 0 0 0 .26-1.44 1.3 1.3 0 0 0-1.19-.79h-.14a1.6 1.6 0 0 1 0-3.2h.07a1.3 1.3 0 0 0 1.19-.85 1.3 1.3 0 0 0-.26-1.44l-.05-.05a1.6 1.6 0 1 1 2.26-2.26l.05.05a1.3 1.3 0 0 0 1.44.26h.06a1.3 1.3 0 0 0 .79-1.19v-.14a1.6 1.6 0 0 1 3.2 0v.07a1.3 1.3 0 0 0 .79 1.19 1.3 1.3 0 0 0 1.44-.26l.05-.05a1.6 1.6 0 1 1 2.26 2.26l-.05.05a1.3 1.3 0 0 0-.26 1.44v.06a1.3 1.3 0 0 0 1.19.79h.14a1.6 1.6 0 0 1 0 3.2h-.07a1.3 1.3 0 0 0-1.19.79z"/>',
+  zzz: '<path d="M3 10.5h4.4L3 15.4h4.4"/><path d="M9.4 7.1h3.4l-3.4 3.8h3.4"/><path d="M14.4 4.5h2.6l-2.6 2.9h2.6"/>',
   check: '<path d="M5 10.4l3.2 3.1L15 6.6"/>',
   alert: '<circle cx="10" cy="10" r="6.75"/><path d="M10 6.6v4.1"/><path d="M10 13.4v.05"/>',
   clock: '<circle cx="10" cy="10" r="6.75"/><path d="M10 6.4V10l2.4 1.6"/>',
@@ -36,15 +38,10 @@ export function icon(name, size = 20, cls = "") {
   return `<svg class="ico ${cls}" width="${size}" height="${size}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${P[name] || ""}</svg>`;
 }
 
-/** The app icon, drawn small for the panel header. Matches design/icon/icon-32.svg. */
+/** The app logo for the panel header and the settings page. */
 export function brandMark(size = 22) {
-  return `<svg class="brand-mark" width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-    <rect class="brand-mark-ground" x="1" y="1" width="30" height="30" rx="7" fill="#17181C"/>
-    <rect x="8" y="7" width="13" height="2" fill="#A2A5AC"/>
-    <polygon points="6,12 29,12 27,22 4,22" fill="#FFE45C"/>
-    <rect x="9" y="16" width="13" height="2" fill="#17181C"/>
-    <rect x="8" y="25" width="10" height="2" fill="#A2A5AC"/>
-  </svg>`;
+  const src = typeof chrome !== "undefined" && chrome.runtime ? chrome.runtime.getURL("icons/mark.png") : "../icons/mark.png";
+  return `<img class="brand-mark" src="${src}" width="${size}" height="${size}" alt="" aria-hidden="true">`;
 }
 
 export function esc(s) {

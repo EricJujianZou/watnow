@@ -8,20 +8,21 @@ import { TESTER_BUILD } from "./build.js";
 
 export const DEFAULT_SETTINGS = {
   mode: TESTER_BUILD ? "live" : "demo",
-  theme: "system",
+  theme: "light",
   learnBase: TESTER_BUILD ? "https://learn.uwaterloo.ca" : "http://localhost:8080",
   // liveBaseOverride: set only by the local test harness, see liveBase() in live-source.js
   reminders: {
+    // One lead per deadline type, the position of that type's slider.
     leads: {
-      assignment: ["2d", "morning", "2h"],
-      lab: ["2d", "morning", "2h"],
-      quiz: ["morning", "2h"],
+      assignment: ["2d"],
+      lab: ["2d"],
+      quiz: ["1d"],
       discussion: ["morning"],
       content: ["morning"],
     },
+    // Deadline types the student switched off. No reminders go out for these.
+    offTypes: [],
     mutedCourses: [],
-    quietStart: 23,
-    quietEnd: 8,
     demoAutoSend: false,
   },
 };
@@ -49,7 +50,9 @@ export function emptyState() {
 
 function mergeSettings(saved) {
   const s = saved || {};
-  const r = s.reminders || {};
+  // quietStart and quietEnd come from installs that had the old quiet hours
+  // setting. Nothing reads them now, so they are dropped here.
+  const { quietStart, quietEnd, ...r } = s.reminders || {};
   return {
     ...DEFAULT_SETTINGS,
     ...s,

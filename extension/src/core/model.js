@@ -1,11 +1,11 @@
-// Turns stored state into what the panel shows: the verdict sentence, the
-// trust line with item counts, and the bucketed rows.
+// Turns stored state into what the panel shows: the two verdict lines and the
+// bucketed rows.
 
 import {
   addDays, bucketFor, dayDiff, endOfWeek, fmtDate, fmtDueDay, fmtLate, fmtRange, fmtShortDate,
-  fmtTime, fmtUntil, fmtWeekdayShort, sameDay, startOfWeek, HOUR,
+  fmtTime, fmtUntil, sameDay, startOfWeek, HOUR,
 } from "./dates.js";
-import { CATEGORY_LABEL, CATEGORY_PLURAL } from "../data/source.js";
+import { CATEGORY_LABEL } from "../data/source.js";
 
 export const BUCKETS = [
   { id: "overdue", label: "Overdue" },
@@ -34,21 +34,36 @@ export function verdict(items, courses, now) {
   const eow = endOfWeek(now);
   const overdue = open.filter((i) => new Date(i.dueAt) < now);
   const today = open.filter((i) => new Date(i.dueAt) >= now && sameDay(i.dueAt, now));
-  const week = open.filter((i) => !sameDay(i.dueAt, now) && new Date(i.dueAt) > now && new Date(i.dueAt) <= eow);
+  const week = open
+    .filter((i) => !sameDay(i.dueAt, now) && new Date(i.dueAt) > now && new Date(i.dueAt) <= eow)
+    .sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt));
   const future = open.filter((i) => new Date(i.dueAt) >= now).sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt));
   const course = (id) => courses.find((c) => c.id === id) || { code: "" };
 
-  let headline;
+  /** "tomorrow" or "Fri, Sep 25", for the "due by" line. */
+  const byLabel = (d) => (dayDiff(d, now) === 1 ? "tomorrow" : fmtDate(d));
+
   const t = today.length;
   const w = week.length;
-  if (!open.length) headline = "Everything on Learn is handed in.";
-  else if (t && w) headline = `You have ${plural(t, "thing", "things")} due today and ${w} more by Sunday.`;
-  else if (t) headline = `You have ${plural(t, "thing", "things")} due today and nothing else this week.`;
-  else if (w) headline = `Nothing is due today. You have ${plural(w, "thing", "things")} due by Sunday.`;
-  else if (future.length) {
+  let line1;
+  let sleepy = false;
+  if (!open.length) line1 = "Everything on Learn is handed in.";
+  else if (t) line1 = `You have ${plural(t, "deadline", "deadlines")} due today.`;
+  else {
+    line1 = "Nothing due today";
+    sleepy = true;
+  }
+
+  let line2 = null;
+  if (w) {
+    const last = week[week.length - 1].dueAt;
+    line2 = t
+      ? `You have ${plural(w, "more deadline", "more deadlines")} due by ${byLabel(last)}.`
+      : `You have ${plural(w, "deadline", "deadlines")} due by ${byLabel(last)}.`;
+  } else if (!t && future.length) {
     const n = future[0];
-    headline = `Nothing else is due this week. Next up is ${course(n.courseId).code} ${n.title} on ${fmtDate(n.dueAt)}.`;
-  } else headline = "Nothing left to hand in right now.";
+    line2 = `Next up is ${course(n.courseId).code} on ${fmtDate(n.dueAt)}.`;
+  }
 
   let detail = null;
   if (overdue.length === 1) {
@@ -57,29 +72,9 @@ export function verdict(items, courses, now) {
     const when = day === "Yesterday" ? "yesterday" : day === "Today" ? "today" : `on ${fmtDate(o.dueAt)}`;
     detail = `${course(o.courseId).code} ${o.title} was due ${when} at ${fmtTime(o.dueAt)} and is still open.`;
   } else if (overdue.length > 1) {
-    detail = `${overdue.length} things are past their due date and still open.`;
+    detail = `${overdue.length} deadlines are past their due date and still open.`;
   }
-  return { headline, detail, counts: { today: t, week: w, overdue: overdue.length } };
-}
-
-function joinList(parts) {
-  if (parts.length <= 1) return parts.join("");
-  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
-}
-
-/** "Found 23 items across 5 courses on Learn." or a per course breakdown. */
-export function trustLine(items, courses, filter) {
-  if (filter === "all") {
-    return `Found ${plural(items.length, "deadline", "deadlines")} across ${plural(courses.length, "course", "courses")} on Learn.`;
-  }
-  const course = courses.find((c) => c.id === filter);
-  const mine = items.filter((i) => i.courseId === filter);
-  const order = ["assignment", "lab", "quiz", "discussion", "content"];
-  const parts = order
-    .map((cat) => [cat, mine.filter((i) => i.category === cat).length])
-    .filter(([, n]) => n)
-    .map(([cat, n]) => `${n} ${CATEGORY_PLURAL[cat][n === 1 ? 0 : 1]}`);
-  return `Found ${plural(mine.length, "deadline", "deadlines")} in ${course ? course.code : "this course"}: ${joinList(parts)}.`;
+  return { line1, line2, sleepy, detail, counts: { today: t, week: w, overdue: overdue.length } };
 }
 
 function movedLabel(fromIso, due) {
@@ -90,37 +85,29 @@ function movedLabel(fromIso, due) {
 
 export function rowView(item, course, now) {
   const due = new Date(item.dueAt);
-  const diff = dayDiff(due, now);
-  const inWeek = due <= endOfWeek(now) && due >= startOfWeek(now);
-  let dayShort;
-  if (diff === 0) dayShort = "Today";
-  else if (diff === -1) dayShort = "Yesterday";
-  else if (inWeek || (diff < 0 && diff > -7)) dayShort = fmtWeekdayShort(due);
-  else dayShort = fmtShortDate(due);
   let tone = "normal";
   let top = fmtDueDay(due, now);
-  let bottom = fmtTime(due);
+  // Set when the top line is a status or a countdown, so the date still shows.
+  let dateNote = null;
   const ms = due - now;
 
   if (item.status === "submitted") {
     tone = "submitted";
     top = "Submitted";
-    bottom = `${dayShort} ${fmtTime(due)}`;
+    dateNote = fmtDueDay(due, now);
   } else if (item.status === "done") {
     tone = "done";
     top = "Done";
-    bottom = `${dayShort} ${fmtTime(due)}`;
+    dateNote = fmtDueDay(due, now);
   } else if (ms < 0) {
     tone = "overdue";
     top = fmtLate(due, now);
-    bottom = `${dayShort === "Today" ? "Today" : dayShort} ${fmtTime(due)}`;
+    dateNote = fmtDueDay(due, now);
   } else if (ms <= 3 * HOUR) {
     tone = "soon";
     const u = fmtUntil(due, now);
     top = u.charAt(0).toUpperCase() + u.slice(1);
-    bottom = fmtTime(due);
-  } else if (top.includes(",")) {
-    bottom = fmtTime(due);
+    dateNote = fmtDueDay(due, now);
   }
 
   return {
@@ -132,7 +119,10 @@ export function rowView(item, course, now) {
     category: item.category,
     title: item.title,
     top,
-    bottom,
+    dateNote,
+    time: fmtTime(due),
+    // Anything other than the usual 11:59 pm gets a highlighter blob behind it.
+    timeOdd: !(due.getHours() === 23 && due.getMinutes() === 59),
     tone,
     status: item.status,
     movedFrom: item.moved ? movedLabel(item.moved.from, due) : null,
@@ -157,7 +147,6 @@ export function buildModel(state, now, filter = "all") {
     counts,
     total: all.length,
     verdict: verdict(all, courses, now),
-    trust: trustLine(all, courses, filter),
     groups: groups.filter((g) => g.rows.length),
     openInFilter: visible.filter((i) => i.status === "open" && bucketFor(i, now) !== "earlier").length,
     filterCourse: filter === "all" ? null : byId[filter] || null,

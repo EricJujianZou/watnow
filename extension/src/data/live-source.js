@@ -228,6 +228,17 @@ export function assignColors(courses) {
 /* ------------------------------------------------------------------ */
 
 // Keys whose values are never copied into the debug report, at any depth.
+/**
+ * UW codes look like ECE203_pmitran_1269, so the middle segment is the
+ * instructor's username. Debug reports get mailed to us, so keep the course
+ * code and the term code and drop everything between them.
+ */
+function stripOwner(code) {
+  const parts = String(code || "").split("_");
+  const out = parts.length >= 3 ? `${parts[0]}_${parts[parts.length - 1]}` : parts.join("_");
+  return out.slice(0, 60);
+}
+
 const PERSONAL = new Set([
   "FirstName", "LastName", "MiddleName", "UniqueName", "UserName", "Username", "DisplayName",
   "Email", "ExternalEmail", "OrgDefinedId", "Identifier", "ProfileIdentifier", "Pronouns",
@@ -791,7 +802,7 @@ export class LiveSource {
       this.report.courses.push({
         orgUnitId: c.orgUnitId,
         rawName: String(row.OrgUnit.Name || "").slice(0, 120),
-        rawCode: String(row.OrgUnit.Code || "").slice(0, 60),
+        rawCode: stripOwner(row.OrgUnit.Code),
         code: c.code,
         name: c.name,
         termMatch: c.termMatch,
