@@ -9,6 +9,7 @@ import { liveBase, assignColors } from "./data/live-source.js";
 import { DEMO_SCRIPT } from "./data/fixtures.js";
 import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
 import { plannedReminders, reminderCopy, movedCopy } from "./core/reminders.js";
+import { pingInstall, pingDayActive } from "./core/usage.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -53,7 +54,10 @@ async function setup() {
   await syncLiveAlarm();
 }
 
-chrome.runtime.onInstalled.addListener(() => setup());
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "install") pingInstall();
+  setup();
+});
 chrome.runtime.onStartup.addListener(() => setup().then(startupCheck));
 
 /**
@@ -640,6 +644,8 @@ async function notify(kind, itemId, copy, seq) {
 chrome.notifications.onClicked.addListener(async (id) => {
   const [, , itemId] = id.split("|");
   chrome.notifications.clear(id);
+  // Acting on a reminder is using WATnow, even if the panel never opens.
+  pingDayActive("reminder");
   if (itemId) await openItem(itemId);
 });
 

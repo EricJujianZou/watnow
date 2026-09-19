@@ -8,7 +8,7 @@
 
 A Chrome extension for University of Waterloo students.
 
-[**Add to Chrome**](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
+[**Get early access**](mailto:eric@ugmi.ca) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
 
 ![manifest v3](https://img.shields.io/badge/Chrome-Manifest_V3-FFE45C?style=flat-square&labelColor=17181C)
 ![license](https://img.shields.io/badge/license-MIT-FFE45C?style=flat-square&labelColor=17181C)
@@ -19,9 +19,9 @@ A Chrome extension for University of Waterloo students.
 
 <div align="center">
 
-[![Watch the demo](docs/media/launch-thumb.png)](https://github.com/EricJujianZou/watnow/blob/main/docs/media/launch.mp4)
+[![Watch the demo](docs/media/launch-thumb.png)](https://watnow.ugmi.ca/)
 
-<sub><b>36 seconds on a real Learn account, from the first scan to the reminder settings.</b> Click the picture to play it.</sub>
+<sub>WATnow on a real Learn account, from the first scan to the reminder settings. GitHub can't play video in a readme, so the picture opens the clip on <a href="https://watnow.ugmi.ca/">watnow.ugmi.ca</a>.</sub>
 
 </div>
 
@@ -53,16 +53,14 @@ A Chrome extension for University of Waterloo students.
 </tr>
 </table>
 
-<sub>Screenshots use the demo build, which ships with made-up courses so no real student's data is shown.</sub>
+<sub>Screenshots were taken against made-up courses, so no real student's data is shown.</sub>
 
 
-## Installing
+## Getting in
 
-WATnow is in an unlisted beta. [Add it from the Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh), or read the tester instructions at [watnow.ugmi.ca/beta](https://watnow.ugmi.ca/beta/).
+WATnow is in a private beta, so access goes out one person at a time. Email [eric@ugmi.ca](mailto:eric@ugmi.ca) or send a DM to [@sleppyeric](https://www.instagram.com/sleppyeric/) on Instagram and I'll set you up.
 
-Sign in to learn.uwaterloo.ca once, click the WATnow icon in your toolbar, and the panel fills itself in.
-
-The `watnow-<version>.zip` on the [latest release](https://github.com/EricJujianZou/watnow/releases/latest) is the same build, if you would rather load it unpacked. The Source code downloads GitHub attaches to every release are the demo build used for recording videos, not the build to install.
+Once you have it, sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in.
 
 ## What it does with your data
 
@@ -71,17 +69,13 @@ This repo is public so you can read exactly what the extension does with your Le
 - It reads Learn from inside your browser, using the session you're already signed in with. It never sees your password.
 - It only sends GET requests to `learn.uwaterloo.ca/d2l/api/`, so it can't change anything on Learn.
 - Your courses, deadlines and settings are saved in your browser's extension storage on your own computer.
-- The one thing it sends anywhere is an anonymous count when you install it and each time you open the panel, carrying a random ID and the version number. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
+- The only thing it sends anywhere is an anonymous count: once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from Learn. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
 
 The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
-## Building
+## Running it from this repo
 
-```sh
-python3 scripts/package-extension.py
-```
-
-That writes the tester build to `dist/`. The `extension/` folder itself loads as the demo build, with made-up courses and keyboard shortcuts for recording.
+`extension/` is the real build, the same one people install: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
 
 ---
 
