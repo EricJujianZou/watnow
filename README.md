@@ -17,12 +17,6 @@ A Chrome extension for University of Waterloo students.
 
 ---
 
-<div align="center">
-
-[![Watch the demo](docs/media/launch-thumb.png)](https://watnow.ugmi.ca/)
-
-</div>
-
 ## What you get
 
 - Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on Learn.
