@@ -21,8 +21,6 @@ A Chrome extension for University of Waterloo students.
 
 [![Watch the demo](docs/media/launch-thumb.png)](https://watnow.ugmi.ca/)
 
-<sub>WATnow on a real Learn account, from the first scan to the reminder settings. GitHub can't play video in a readme, so the picture opens the clip on <a href="https://watnow.ugmi.ca/">watnow.ugmi.ca</a>.</sub>
-
 </div>
 
 ## What you get
@@ -52,8 +50,6 @@ A Chrome extension for University of Waterloo students.
 <td>The panel follows your Chrome theme, or you can pin it to light or dark.</td>
 </tr>
 </table>
-
-<sub>Screenshots were taken against made-up courses, so no real student's data is shown.</sub>
 
 
 ## Getting in
