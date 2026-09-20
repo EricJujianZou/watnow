@@ -2,7 +2,7 @@
 
 <img src="docs/media/mark.png" width="96" alt="">
 
-# WATnow
+# WATnow &nbsp;<a href="https://watnow.ugmi.ca"><img src="https://img.shields.io/badge/Join%20a%20Waitlist%20of%20500%20Students!-FFE45C?style=flat-square&labelColor=17181C" alt="Join a Waitlist of 500 Students!"></a>
 
 **All your Learn deadlines in one side panel, updated when profs move dates, with reminders before things close.**
 
