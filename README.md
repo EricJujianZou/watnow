@@ -15,6 +15,8 @@ A Chrome extension for University of Waterloo students.
 
 </div>
 
+https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
+
 ---
 
 ## What you get
