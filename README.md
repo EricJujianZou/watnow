@@ -2,13 +2,13 @@
 
 <img src="docs/media/mark.png" width="96" alt="">
 
-# WATnow &nbsp;<a href="https://watnow.ugmi.ca"><img src="https://img.shields.io/badge/Join%20a%20Waitlist%20of%20500%20Students!-FFE45C?style=flat-square&labelColor=17181C" alt="Join a Waitlist of 500 Students!"></a>
+# WATnow &nbsp;<a href="https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh"><img src="https://img.shields.io/badge/Chrome%20Web%20Store-Add%20to%20Chrome-FFE45C?style=flat-square&labelColor=17181C&logo=googlechrome&logoColor=white" alt="Add to Chrome from the Chrome Web Store"></a>
 
 **All your Learn deadlines in one side panel, updated when profs move dates, with reminders before things close.**
 
 A Chrome extension for University of Waterloo students.
 
-[Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
+[Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
 
 ![manifest v3](https://img.shields.io/badge/Chrome-Manifest_V3-FFE45C?style=flat-square&labelColor=17181C)
 ![license](https://img.shields.io/badge/license-MIT-FFE45C?style=flat-square&labelColor=17181C)
@@ -48,11 +48,9 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 </table>
 
 
-## Getting in
+## Install
 
-WATnow is in a private beta, so access goes out one person at a time. Email [eric@ugmi.ca](mailto:eric@ugmi.ca) or send a DM to [@sleppyeric](https://www.instagram.com/sleppyeric/) on Instagram and I'll set you up.
-
-Once you have it, sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in.
+Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). Then sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in.
 
 ## What it does with your data
 
@@ -67,7 +65,9 @@ The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
 ## Running it from this repo
 
-`extension/` is the real build, the same one people install: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
+This section is for developers. Most people should use the Chrome Web Store link above, which also keeps the extension updated.
+
+`extension/` is the same build that goes to the Chrome Web Store: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
 
 ---
 
