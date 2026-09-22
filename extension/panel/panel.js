@@ -191,6 +191,7 @@ function rowHTML(r) {
         ${moved}
       </span>
       <span class="due">
+        ${r.opensNote ? `<span class="opens">${icon("lock", 14)}<span>Opens ${esc(r.opensNote)}</span></span>` : ""}
         <span class="due-top">${topIcon}<span>${esc(r.top)}</span></span>
         ${r.dateNote ? `<span class="due-bottom">${esc(r.dateNote)}</span>` : ""}
         <span class="due-bottom"><span class="due-time${r.timeOdd ? " is-odd" : ""}">${esc(r.time)}</span></span>

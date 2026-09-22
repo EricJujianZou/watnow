@@ -10,6 +10,10 @@ export function learnUrl() {
   return "";
 }
 
+export function courseHomeUrl() {
+  return "";
+}
+
 export function buildCatalog(settings, now = new Date()) {
   return {
     builtAt: now.toISOString(),

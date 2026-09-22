@@ -303,6 +303,7 @@ async function readLive(source, epoch, { onCourses, onProgress, prevItems = [] }
       }
     }
   }
+  if (epoch !== modeEpoch) throw abortError();
   const kept = assignColors([...courses, ...keptExtras]);
   const ids = new Set(kept.map((c) => c.id));
   return {
@@ -654,10 +655,15 @@ async function openItem(itemId) {
   const item = s.items.find((i) => i.id === itemId);
   if (!item) return;
   const settings = await getSettings();
+  // Learn answers "Not Authorized" for an item that has not opened yet, so send
+  // those to the course's list page, where it shows with the date it unlocks.
+  const locked = item.opensAt && Date.parse(item.opensAt) > Date.now();
+  const url = (locked && item.listUrl) || item.url;
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const isLearn = tab && tab.url && (tab.url.startsWith(settings.learnBase) || tab.url.startsWith("https://learn.uwaterloo.ca"));
-  if (tab && isLearn) await chrome.tabs.update(tab.id, { url: item.url });
-  else await chrome.tabs.create({ url: item.url });
+  const home = [settings.learnBase, "https://learn.uwaterloo.ca"];
+  const isLearn = tab && tab.url && home.some((h) => h && tab.url.startsWith(h));
+  if (tab && isLearn) await chrome.tabs.update(tab.id, { url });
+  else await chrome.tabs.create({ url });
 }
 
 /* ------------------------------------------------------------------ */

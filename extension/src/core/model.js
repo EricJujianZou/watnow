@@ -85,6 +85,10 @@ function movedLabel(fromIso, due) {
 
 export function rowView(item, course, now) {
   const due = new Date(item.dueAt);
+  // Some profs set a date the work unlocks. Until then Learn won't let you in,
+  // so the row says when you can start.
+  const opens = item.opensAt ? new Date(item.opensAt) : null;
+  const opensNote = opens && opens > now && item.status === "open" ? fmtDueDay(opens, now) : null;
   let tone = "normal";
   let top = fmtDueDay(due, now);
   // Set when the top line is a status or a countdown, so the date still shows.
@@ -120,6 +124,7 @@ export function rowView(item, course, now) {
     title: item.title,
     top,
     dateNote,
+    opensNote,
     time: fmtTime(due),
     // Anything other than the usual 11:59 pm gets a highlighter blob behind it.
     timeOdd: !(due.getHours() === 23 && due.getMinutes() === 59),

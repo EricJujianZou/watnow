@@ -164,7 +164,7 @@ export function termRange(code) {
 
 const SEASON_MONTH = { winter: 1, spring: 5, summer: 5, fall: 9, autumn: 9 };
 
-function termFromText(text) {
+export function termFromText(text) {
   const s = String(text || "");
   const code = s.match(/(?:^|[^0-9])(1\d\d[159])(?![0-9])/);
   if (code) return Number(code[1]);
@@ -466,9 +466,20 @@ function dropEchoes(items) {
   return out;
 }
 
-export function itemUrl(base, ou, kind, id) {
+const NUMERIC_ID = /^\d+$/;
+
+/**
+ * A deep link straight to one item. Only ever built from a real tool id: Learn
+ * answers a made-up id with "Internal Error", so a caller that is not sure of
+ * the id gets null here and falls back to the tool's list page.
+ */
+export function itemUrl(base, ou, kind, id, groupId = null) {
+  if (!NUMERIC_ID.test(String(id))) return null;
   switch (kind) {
     case "dropbox":
+      // A group folder's page needs the student's group id as well; without it
+      // Learn answers "Internal Error".
+      if (groupId != null) return `${base}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=${id}&grpid=${groupId}&isprv=0&bp=0&ou=${ou}`;
       return `${base}/d2l/lms/dropbox/user/folder_submit_files.d2l?db=${id}&ou=${ou}`;
     case "quiz":
       return `${base}/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${id}&ou=${ou}`;
@@ -476,6 +487,20 @@ export function itemUrl(base, ou, kind, id) {
       return `${base}/d2l/le/${ou}/discussions/topics/${id}/View`;
     default:
       return `${base}/d2l/le/content/${ou}/viewContent/${id}/View`;
+  }
+}
+
+/** The course's list page for a tool. Always openable, even before an item unlocks. */
+export function toolListUrl(base, ou, kind) {
+  switch (kind) {
+    case "dropbox":
+      return `${base}/d2l/lms/dropbox/user/folders_list.d2l?ou=${ou}`;
+    case "quiz":
+      return `${base}/d2l/lms/quizzing/user/quizzes_list.d2l?ou=${ou}`;
+    case "discussion":
+      return `${base}/d2l/le/${ou}/discussions/List`;
+    default:
+      return `${base}/d2l/le/content/${ou}/Home`;
   }
 }
 
@@ -1031,10 +1056,16 @@ export class LiveSource {
       seen.sample(f.Name, { DueDate: f.DueDate ?? null, StartDate: avail.StartDate ?? null, EndDate: avail.EndDate ?? null }, !!dueAt);
       if (!dueAt) continue;
       let submittedAt = null;
+      // A group folder (GroupTypeId set) is only reachable with the student's
+      // group id, which Learn gives as the submitting Entity once the group
+      // has handed something in. Before that the link goes to the list page.
+      const isGroup = f.GroupTypeId != null;
+      let groupId = null;
       try {
         const subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${f.Id}/submissions/mysubmissions/`));
         const dates = [];
         for (const s of subs) {
+          if (isGroup && s && s.Entity && NUMERIC_ID.test(String(s.Entity.EntityId))) groupId = String(s.Entity.EntityId);
           const inner = s && Array.isArray(s.Submissions) ? s.Submissions : [s];
           for (const x of inner) {
             if (!x) continue;
@@ -1054,6 +1085,9 @@ export class LiveSource {
         opensAt: laterOnly(isoOrNull(avail.StartDate), dueAt),
         categoryName: catNames[f.CategoryId] || "",
         completedAt: submittedAt,
+        groupId,
+        groupFolder: isGroup,
+        exactId: isGroup && groupId == null ? false : undefined,
       });
     }
     return out;
@@ -1148,7 +1182,10 @@ export class LiveSource {
           title: x.title,
           dueAt: x.dueAt,
           dueField: x.dueField || null,
-          url: x.url || itemUrl(this.base, ou, x.kind, x.sourceId),
+          url: x.url || (x.exactId === false ? null : itemUrl(this.base, ou, x.kind, x.sourceId, x.groupId)) || toolListUrl(this.base, ou, x.kind),
+          listUrl: toolListUrl(this.base, ou, x.kind),
+          learnUrl: x.url || null,
+          groupFolder: !!x.groupFolder,
           status: x.completedAt ? "submitted" : "open",
           completedAt: x.completedAt || null,
           moved: null,
@@ -1165,7 +1202,16 @@ export class LiveSource {
         found.dueField = x.dueField || null;
         found.category = categoryFor(x.kind, x.title, x.categoryName);
         found.title = x.title;
-      } else if (src === "feed" && x.url) found.url = x.url;
+        // The tool's id is the real one, so it fixes a link guessed from elsewhere.
+        // A group folder overrides even Learn's own feed link, which lacks the group id.
+        if (x.groupFolder) {
+          found.groupFolder = true;
+          found.url = (x.groupId != null && itemUrl(this.base, ou, x.kind, x.sourceId, x.groupId)) || toolListUrl(this.base, ou, x.kind);
+        } else if (!found.learnUrl) found.url = itemUrl(this.base, ou, x.kind, x.sourceId) || found.url;
+      } else if (src === "feed" && x.url && !found.groupFolder) {
+        found.url = x.url;
+        found.learnUrl = x.url;
+      }
       if (x.opensAt && (!found.opensAt || src === "tool")) found.opensAt = x.opensAt;
       if (x.completedAt && found.status !== "submitted") {
         found.status = "submitted";
@@ -1210,11 +1256,15 @@ export class LiveSource {
       if (!dueAt) continue;
       const kind = kindOf(x);
       const url = absolute(this.base, x.ItemUrl);
-      const sourceId = toolIdFromUrl(kind, url) || String(x.ItemId);
+      const fromUrl = toolIdFromUrl(kind, url);
+      const sourceId = fromUrl || String(x.ItemId);
       add(
         {
           kind,
           sourceId,
+          // For a tool item the feed gives a content id, which is not the id the
+          // tool's own page wants. Only trust an id read out of the item's link.
+          exactId: kind === "content" || !!fromUrl,
           title: String(x.ItemName || "Learn item"),
           dueAt,
           dueField: fieldOf(x.DueDate),
@@ -1262,6 +1312,8 @@ export class LiveSource {
       i.seenIn = [...i.seen];
       delete i.srcs;
       delete i.seen;
+      delete i.learnUrl;
+      delete i.groupFolder;
     }
     rep.items = items.length;
     rep.submitted = items.filter((i) => i.status === "submitted").length;

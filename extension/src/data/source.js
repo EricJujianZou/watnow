@@ -25,6 +25,8 @@
   @property {string} title
   @property {string} dueAt         ISO timestamp
   @property {string} url           The item's own page on Learn
+  @property {string} [listUrl]     LIVE only: the course's list page for the tool, used when the item's own page would error
+  @property {string} [opensAt]     ISO timestamp the item unlocks, when Learn gives one
   @property {"open"|"submitted"|"done"} status   submitted = Learn shows it; done = the student checked it off by hand
   @property {string|null} completedAt
   @property {string} [details]     Instructions text, used by the mock Learn pages

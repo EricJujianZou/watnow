@@ -365,10 +365,12 @@ details.group > summary:hover .gh-title {
   color: var(--ink-faint);
 }
 
+/* A tap and a Learn submission fill the ring the same green. The label under
+   the row still says Done or Submitted, and a tapped item can be undone. */
 .check[aria-pressed="true"] .check-ring {
-  background: var(--accent);
-  box-shadow: var(--clay-yellow);
-  color: var(--on-accent);
+  background: var(--done);
+  box-shadow: var(--blob);
+  color: #fff;
 }
 
 .tone-submitted .check-ring,
@@ -447,6 +449,21 @@ details.group > summary:hover .gh-title {
   white-space: nowrap;
 }
 
+/* The date the work unlocks, above the due date it belongs to. */
+.opens {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  color: var(--ink-muted);
+}
+
+.opens svg {
+  flex: none;
+  opacity: 0.75;
+}
+
 .due-top {
   position: relative;
   display: inline-flex;
@@ -502,7 +519,7 @@ details.group > summary:hover .gh-title {
 }
 
 .tone-done .due-top {
-  color: var(--ink-muted);
+  color: var(--done);
 }
 
 .tone-submitted .due-time,
