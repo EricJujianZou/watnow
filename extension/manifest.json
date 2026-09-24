@@ -32,7 +32,8 @@
     "sidePanel",
     "storage",
     "notifications",
-    "alarms"
+    "alarms",
+    "windows"
   ],
   "host_permissions": [
     "https://learn.uwaterloo.ca/*"

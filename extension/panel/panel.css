@@ -10,6 +10,16 @@ html.is-popup body {
   overflow-y: auto;
 }
 
+html.is-dock,
+html.is-dock body {
+  width: 400px;
+  min-height: 100vh;
+}
+
+html.is-dock body {
+  overflow-x: hidden;
+}
+
 /* ---------- Top bar ---------- */
 .bar {
   position: sticky;

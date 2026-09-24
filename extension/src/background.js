@@ -37,15 +37,58 @@ const nowIso = () => new Date().toISOString();
 /* Setup                                                               */
 /* ------------------------------------------------------------------ */
 
-const ARC_POPUP = "panel/panel.html?popup=1";
+const DOCK_WIDTH = 400;
+const DOCK_PANEL = "panel/panel.html?dock=1";
 
-async function enablePopupMode() {
+async function dockBounds(tab) {
+  let browserWin;
+  try {
+    browserWin = tab?.windowId != null ? await chrome.windows.get(tab.windowId) : await chrome.windows.getLastFocused();
+  } catch {
+    browserWin = null;
+  }
+  if (!browserWin || browserWin.width == null || browserWin.height == null) {
+    return { width: DOCK_WIDTH, height: 800, left: 100, top: 0 };
+  }
+  return {
+    width: DOCK_WIDTH,
+    height: browserWin.height,
+    left: browserWin.left + browserWin.width - DOCK_WIDTH,
+    top: browserWin.top,
+  };
+}
+
+async function openPanelWindow(tab) {
+  const { panelWindowId } = await chrome.storage.session.get("panelWindowId");
+  if (panelWindowId) {
+    try {
+      await chrome.windows.update(panelWindowId, { focused: true, drawAttention: true });
+      return;
+    } catch {
+      await chrome.storage.session.remove("panelWindowId");
+    }
+  }
+  const bounds = await dockBounds(tab);
+  try {
+    const win = await chrome.windows.create({
+      url: chrome.runtime.getURL(DOCK_PANEL),
+      type: "popup",
+      ...bounds,
+      focused: true,
+    });
+    await chrome.storage.session.set({ panelWindowId: win.id });
+  } catch (e) {
+    console.warn("dock window", e);
+  }
+}
+
+async function enableDockMode() {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
-    await chrome.action.setPopup({ popup: ARC_POPUP });
+    await chrome.action.setPopup({ popup: "" });
     await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: false } });
   } catch (e) {
-    console.warn("popup mode", e);
+    console.warn("dock mode", e);
   }
 }
 
@@ -63,7 +106,7 @@ async function enableSidePanelMode() {
 async function configureOpenMode() {
   const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
   if (wnBrowser?.sidePanelWorks === true) await enableSidePanelMode();
-  else if (wnBrowser?.sidePanelWorks === false) await enablePopupMode();
+  else if (wnBrowser?.sidePanelWorks === false) await enableDockMode();
 }
 
 async function probeSidePanel(tab) {
@@ -85,22 +128,29 @@ async function probeSidePanel(tab) {
 let probingOpenMode = false;
 chrome.action.onClicked.addListener(async (tab) => {
   const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
-  if (wnBrowser?.sidePanelWorks !== undefined || probingOpenMode) return;
+  if (wnBrowser?.sidePanelWorks === true) return;
+  if (wnBrowser?.sidePanelWorks === false) {
+    await openPanelWindow(tab);
+    return;
+  }
+  if (probingOpenMode) return;
   probingOpenMode = true;
   try {
     const works = await probeSidePanel(tab);
     if (works) await enableSidePanelMode();
     else {
-      await enablePopupMode();
-      try {
-        await chrome.action.openPopup();
-      } catch {
-        /* openPopup needs a recent user gesture; onClicked counts in Chrome 127+ */
-      }
+      await enableDockMode();
+      await openPanelWindow(tab);
     }
   } finally {
     probingOpenMode = false;
   }
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  chrome.storage.session.get("panelWindowId").then(({ panelWindowId }) => {
+    if (panelWindowId === windowId) chrome.storage.session.remove("panelWindowId");
+  });
 });
 
 async function setup() {
@@ -1048,7 +1098,7 @@ async function handle(msg, sender) {
       await scheduleReminders();
       return { ok: true };
     case "env:arc":
-      await enablePopupMode();
+      await enableDockMode();
       return { ok: true };
     default:
       return { ok: false, reason: "unknown message" };

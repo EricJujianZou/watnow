@@ -9,8 +9,10 @@ import { pingPanelOpen } from "../src/core/usage.js";
 import { isArcPage } from "../src/core/browser.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
-const IS_POPUP = new URLSearchParams(location.search).has("popup");
-if (IS_POPUP) document.documentElement.classList.add("is-popup");
+const IS_DOCK = new URLSearchParams(location.search).has("dock");
+const IS_TOOLBAR_POPUP = new URLSearchParams(location.search).has("popup") && !IS_DOCK;
+if (IS_DOCK) document.documentElement.classList.add("is-dock");
+else if (IS_TOOLBAR_POPUP) document.documentElement.classList.add("is-popup");
 const PREVIEW = new URLSearchParams(location.search).get("preview");
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const EASE_IN_OUT = "cubic-bezier(0.65, 0, 0.35, 1)";
@@ -32,13 +34,13 @@ let listScroll = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (type, extra = {}) => chrome.runtime.sendMessage({ type, ...extra }).catch(() => null);
 const reduced = () => reduceMotion.matches;
-const scrollTop = () => (IS_POPUP ? document.body.scrollTop : window.scrollY);
+const scrollTop = () => (IS_TOOLBAR_POPUP ? document.body.scrollTop : window.scrollY);
 const scrollTo = (y) => {
-  if (IS_POPUP) document.body.scrollTop = y;
+  if (IS_TOOLBAR_POPUP) document.body.scrollTop = y;
   else window.scrollTo(0, y);
 };
-const viewHeight = () => (IS_POPUP ? document.body.clientHeight : window.innerHeight);
-const maxScroll = () => (IS_POPUP ? document.body.scrollHeight : document.documentElement.scrollHeight) - viewHeight();
+const viewHeight = () => (IS_TOOLBAR_POPUP ? document.body.clientHeight : window.innerHeight);
+const maxScroll = () => (IS_TOOLBAR_POPUP ? document.body.scrollHeight : document.documentElement.scrollHeight) - viewHeight();
 
 let queue = Promise.resolve();
 function enqueue(fn) {
@@ -79,7 +81,7 @@ function renderBar() {
 }
 
 const onPageScroll = () => bar.classList.toggle("is-scrolled", scrollTop() > 4);
-if (IS_POPUP) document.body.addEventListener("scroll", onPageScroll, { passive: true });
+if (IS_TOOLBAR_POPUP) document.body.addEventListener("scroll", onPageScroll, { passive: true });
 else window.addEventListener("scroll", onPageScroll, { passive: true });
 
 /* ------------------------------------------------------------------ */
@@ -728,7 +730,21 @@ setInterval(() => {
 /* Start                                                               */
 /* ------------------------------------------------------------------ */
 
+function snapDockWindow() {
+  const w = 400;
+  const h = window.screen.availHeight;
+  const l = window.screen.availLeft + window.screen.availWidth - w;
+  const t = window.screen.availTop;
+  try {
+    window.resizeTo(w, h);
+    window.moveTo(l, t);
+  } catch {
+    /* Arc may ignore some window APIs; create-time bounds are the fallback. */
+  }
+}
+
 (async function init() {
+  if (IS_DOCK) snapDockWindow();
   settings = await getSettings();
   applyTheme(settings.theme);
   document.title = APP;
