@@ -10,6 +10,7 @@ import { DEMO_SCRIPT } from "./data/fixtures.js";
 import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
 import { plannedReminders, reminderCopy, movedCopy } from "./core/reminders.js";
 import { pingInstall, pingDayActive } from "./core/usage.js";
+import { isArcWorker } from "./core/browser.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -37,12 +38,25 @@ const nowIso = () => new Date().toISOString();
 /* Setup                                                               */
 /* ------------------------------------------------------------------ */
 
+const ARC_POPUP = "panel/panel.html?popup=1";
+
+async function applyArcPopup() {
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
+  if (!wnBrowser?.arc && !isArcWorker()) return;
+  try {
+    await chrome.action.setPopup({ popup: ARC_POPUP });
+  } catch (e) {
+    console.warn("arc popup", e);
+  }
+}
+
 async function setup() {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   } catch (e) {
     console.warn("sidePanel behavior", e);
   }
+  await applyArcPopup();
   await chrome.action.setBadgeBackgroundColor({ color: BADGE_BG });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
   const { settings } = await chrome.storage.local.get("settings");
@@ -852,13 +866,16 @@ async function demoReset() {
 async function deleteData() {
   modeEpoch++;
   await chrome.alarms.clear(LIVE_SYNC);
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
   await chrome.storage.local.clear();
+  if (wnBrowser) await chrome.storage.local.set({ wnBrowser });
   await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
   await setCatalog(buildCatalog(DEFAULT_SETTINGS));
   await setState({ ...emptyState(), deletedAt: nowIso() });
   await clearNotifications();
   await chrome.alarms.clear("reminder");
   await refreshBadge();
+  await applyArcPopup();
   return { ok: true };
 }
 
@@ -981,6 +998,10 @@ async function handle(msg, sender) {
     }
     case "settings:changed":
       await scheduleReminders();
+      return { ok: true };
+    case "env:arc":
+      await chrome.storage.local.set({ wnBrowser: { arc: true } });
+      await applyArcPopup();
       return { ok: true };
     default:
       return { ok: false, reason: "unknown message" };

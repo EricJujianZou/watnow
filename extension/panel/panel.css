@@ -4,6 +4,12 @@ body {
   min-width: 320px;
 }
 
+html.is-popup body {
+  width: 400px;
+  height: 590px;
+  overflow-y: auto;
+}
+
 /* ---------- Top bar ---------- */
 .bar {
   position: sticky;
