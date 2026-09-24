@@ -27,8 +27,3 @@ export function isArcPage(doc) {
     }, 250);
   });
 }
-
-/** Service-worker signal for Arc. None found that differs from Chrome, so always false. */
-export function isArcWorker() {
-  return false;
-}

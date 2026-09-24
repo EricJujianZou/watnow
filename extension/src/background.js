@@ -10,7 +10,6 @@ import { DEMO_SCRIPT } from "./data/fixtures.js";
 import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
 import { plannedReminders, reminderCopy, movedCopy } from "./core/reminders.js";
 import { pingInstall, pingDayActive } from "./core/usage.js";
-import { isArcWorker } from "./core/browser.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -40,23 +39,72 @@ const nowIso = () => new Date().toISOString();
 
 const ARC_POPUP = "panel/panel.html?popup=1";
 
-async function applyArcPopup() {
-  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
-  if (!wnBrowser?.arc && !isArcWorker()) return;
+async function enablePopupMode() {
   try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
     await chrome.action.setPopup({ popup: ARC_POPUP });
+    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: false } });
   } catch (e) {
-    console.warn("arc popup", e);
+    console.warn("popup mode", e);
   }
 }
 
-async function setup() {
+async function enableSidePanelMode() {
   try {
+    await chrome.action.setPopup({ popup: "" });
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: true } });
   } catch (e) {
-    console.warn("sidePanel behavior", e);
+    console.warn("side panel mode", e);
   }
-  await applyArcPopup();
+}
+
+/** Restore saved open mode, or leave unset so the first icon click probes side panel support. */
+async function configureOpenMode() {
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
+  if (wnBrowser?.sidePanelWorks === true) await enableSidePanelMode();
+  else if (wnBrowser?.sidePanelWorks === false) await enablePopupMode();
+}
+
+async function probeSidePanel(tab) {
+  if (!chrome.sidePanel?.open) return false;
+  try {
+    const opts = { enabled: true, path: "panel/panel.html" };
+    if (tab?.id) opts.tabId = tab.id;
+    await chrome.sidePanel.setOptions(opts);
+    if (tab?.windowId) await chrome.sidePanel.open({ windowId: tab.windowId });
+    else if (tab?.id) await chrome.sidePanel.open({ tabId: tab.id });
+    await wait(400);
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
+    return contexts.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+let probingOpenMode = false;
+chrome.action.onClicked.addListener(async (tab) => {
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
+  if (wnBrowser?.sidePanelWorks !== undefined || probingOpenMode) return;
+  probingOpenMode = true;
+  try {
+    const works = await probeSidePanel(tab);
+    if (works) await enableSidePanelMode();
+    else {
+      await enablePopupMode();
+      try {
+        await chrome.action.openPopup();
+      } catch {
+        /* openPopup needs a recent user gesture; onClicked counts in Chrome 127+ */
+      }
+    }
+  } finally {
+    probingOpenMode = false;
+  }
+});
+
+async function setup() {
+  await configureOpenMode();
   await chrome.action.setBadgeBackgroundColor({ color: BADGE_BG });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
   const { settings } = await chrome.storage.local.get("settings");
@@ -875,7 +923,7 @@ async function deleteData() {
   await clearNotifications();
   await chrome.alarms.clear("reminder");
   await refreshBadge();
-  await applyArcPopup();
+  await configureOpenMode();
   return { ok: true };
 }
 
@@ -1000,8 +1048,7 @@ async function handle(msg, sender) {
       await scheduleReminders();
       return { ok: true };
     case "env:arc":
-      await chrome.storage.local.set({ wnBrowser: { arc: true } });
-      await applyArcPopup();
+      await enablePopupMode();
       return { ok: true };
     default:
       return { ok: false, reason: "unknown message" };
