@@ -730,21 +730,7 @@ setInterval(() => {
 /* Start                                                               */
 /* ------------------------------------------------------------------ */
 
-function snapDockWindow() {
-  const w = 400;
-  const h = window.screen.availHeight;
-  const l = window.screen.availLeft + window.screen.availWidth - w;
-  const t = window.screen.availTop;
-  try {
-    window.resizeTo(w, h);
-    window.moveTo(l, t);
-  } catch {
-    /* Arc may ignore some window APIs; create-time bounds are the fallback. */
-  }
-}
-
 (async function init() {
-  if (IS_DOCK) snapDockWindow();
   settings = await getSettings();
   applyTheme(settings.theme);
   document.title = APP;

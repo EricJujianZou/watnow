@@ -10,13 +10,13 @@ html.is-popup body {
   overflow-y: auto;
 }
 
-html.is-dock,
-html.is-dock body {
-  width: 400px;
-  min-height: 100vh;
+html.is-dock {
+  height: 100%;
 }
 
 html.is-dock body {
+  width: 100%;
+  min-height: 100%;
   overflow-x: hidden;
 }
 
