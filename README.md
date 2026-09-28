@@ -12,6 +12,7 @@ A Chrome extension for University of Waterloo students.
 
 ![manifest v3](https://img.shields.io/badge/Chrome-Manifest_V3-FFE45C?style=flat-square&labelColor=17181C)
 ![license](https://img.shields.io/badge/license-MIT-FFE45C?style=flat-square&labelColor=17181C)
+![installs](https://img.shields.io/badge/installs-861-FFE45C?style=flat-square&labelColor=17181C)
 
 </div>
 
@@ -47,6 +48,16 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 </tr>
 </table>
 
+
+## Usage
+
+These numbers come from the anonymous install counts described under "What it does with your data". They were last updated on September 27, 2026.
+
+- 861 people have installed WATnow.
+- 735 of them opened it in the last 7 days.
+- 37% opened it again the day after they installed it, and 54% came back on some later day.
+
+The user count on the Chrome Web Store runs a few days behind these numbers.
 
 ## Install
 
