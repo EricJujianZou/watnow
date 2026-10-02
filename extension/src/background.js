@@ -37,12 +37,124 @@ const nowIso = () => new Date().toISOString();
 /* Setup                                                               */
 /* ------------------------------------------------------------------ */
 
-async function setup() {
+const DOCK_WIDTH = 400;
+const DOCK_PANEL = "panel/panel.html?dock=1";
+
+async function dockBounds(tab) {
+  let browserWin;
   try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  } catch (e) {
-    console.warn("sidePanel behavior", e);
+    browserWin = tab?.windowId != null ? await chrome.windows.get(tab.windowId) : await chrome.windows.getLastFocused();
+  } catch {
+    browserWin = null;
   }
+  if (!browserWin || browserWin.width == null || browserWin.height == null) {
+    return { width: DOCK_WIDTH, height: 800, left: 100, top: 0 };
+  }
+  return {
+    width: DOCK_WIDTH,
+    height: browserWin.height,
+    left: browserWin.left + browserWin.width - DOCK_WIDTH,
+    top: browserWin.top,
+  };
+}
+
+async function openPanelWindow(tab) {
+  const { panelWindowId } = await chrome.storage.session.get("panelWindowId");
+  if (panelWindowId) {
+    try {
+      await chrome.windows.update(panelWindowId, { focused: true, drawAttention: true });
+      return;
+    } catch {
+      await chrome.storage.session.remove("panelWindowId");
+    }
+  }
+  const bounds = await dockBounds(tab);
+  try {
+    const win = await chrome.windows.create({
+      url: chrome.runtime.getURL(DOCK_PANEL),
+      type: "popup",
+      ...bounds,
+      focused: true,
+    });
+    await chrome.storage.session.set({ panelWindowId: win.id });
+  } catch (e) {
+    console.warn("dock window", e);
+  }
+}
+
+async function enableDockMode() {
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+    await chrome.action.setPopup({ popup: "" });
+    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: false } });
+  } catch (e) {
+    console.warn("dock mode", e);
+  }
+}
+
+async function enableSidePanelMode() {
+  try {
+    await chrome.action.setPopup({ popup: "" });
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: true } });
+  } catch (e) {
+    console.warn("side panel mode", e);
+  }
+}
+
+/** Restore saved open mode, or leave unset so the first icon click probes side panel support. */
+async function configureOpenMode() {
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
+  if (wnBrowser?.sidePanelWorks === true) await enableSidePanelMode();
+  else if (wnBrowser?.sidePanelWorks === false) await enableDockMode();
+}
+
+async function probeSidePanel(tab) {
+  if (!chrome.sidePanel?.open) return false;
+  try {
+    const opts = { enabled: true, path: "panel/panel.html" };
+    if (tab?.id) opts.tabId = tab.id;
+    await chrome.sidePanel.setOptions(opts);
+    if (tab?.windowId) await chrome.sidePanel.open({ windowId: tab.windowId });
+    else if (tab?.id) await chrome.sidePanel.open({ tabId: tab.id });
+    await wait(400);
+    const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
+    return contexts.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+let probingOpenMode = false;
+chrome.action.onClicked.addListener(async (tab) => {
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
+  if (wnBrowser?.sidePanelWorks === true) return;
+  if (wnBrowser?.sidePanelWorks === false) {
+    await openPanelWindow(tab);
+    return;
+  }
+  if (probingOpenMode) return;
+  probingOpenMode = true;
+  try {
+    const works = await probeSidePanel(tab);
+    if (works) await enableSidePanelMode();
+    else {
+      await enableDockMode();
+      await openPanelWindow(tab);
+    }
+  } finally {
+    probingOpenMode = false;
+  }
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  chrome.storage.session.get("panelWindowId").then(({ panelWindowId }) => {
+    if (panelWindowId === windowId) chrome.storage.session.remove("panelWindowId");
+  });
+});
+
+async function setup() {
+  await configureOpenMode();
   await chrome.action.setBadgeBackgroundColor({ color: BADGE_BG });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
   const { settings } = await chrome.storage.local.get("settings");
@@ -852,13 +964,16 @@ async function demoReset() {
 async function deleteData() {
   modeEpoch++;
   await chrome.alarms.clear(LIVE_SYNC);
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
   await chrome.storage.local.clear();
+  if (wnBrowser) await chrome.storage.local.set({ wnBrowser });
   await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
   await setCatalog(buildCatalog(DEFAULT_SETTINGS));
   await setState({ ...emptyState(), deletedAt: nowIso() });
   await clearNotifications();
   await chrome.alarms.clear("reminder");
   await refreshBadge();
+  await configureOpenMode();
   return { ok: true };
 }
 
@@ -981,6 +1096,9 @@ async function handle(msg, sender) {
     }
     case "settings:changed":
       await scheduleReminders();
+      return { ok: true };
+    case "env:arc":
+      await enableDockMode();
       return { ok: true };
     default:
       return { ok: false, reason: "unknown message" };

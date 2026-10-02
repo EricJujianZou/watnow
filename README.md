@@ -6,7 +6,7 @@
 
 **All your Learn deadlines in one side panel, updated when profs move dates, with reminders before things close.**
 
-A Chrome extension for University of Waterloo students.
+A Chrome extension for University of Waterloo students. In Arc, which has no side panel, WATnow opens in a tall panel window docked to the right edge of the screen.
 
 [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
 

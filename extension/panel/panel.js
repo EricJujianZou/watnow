@@ -6,8 +6,13 @@ import { mountSettings, applyTheme } from "../src/ui/settings-view.js";
 import { liveBase } from "../src/data/live-source.js";
 import { TESTER_BUILD } from "../src/core/build.js";
 import { pingPanelOpen } from "../src/core/usage.js";
+import { isArcPage } from "../src/core/browser.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
+const IS_DOCK = new URLSearchParams(location.search).has("dock");
+const IS_TOOLBAR_POPUP = new URLSearchParams(location.search).has("popup") && !IS_DOCK;
+if (IS_DOCK) document.documentElement.classList.add("is-dock");
+else if (IS_TOOLBAR_POPUP) document.documentElement.classList.add("is-popup");
 const PREVIEW = new URLSearchParams(location.search).get("preview");
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const EASE_IN_OUT = "cubic-bezier(0.65, 0, 0.35, 1)";
@@ -29,6 +34,13 @@ let listScroll = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (type, extra = {}) => chrome.runtime.sendMessage({ type, ...extra }).catch(() => null);
 const reduced = () => reduceMotion.matches;
+const scrollTop = () => (IS_TOOLBAR_POPUP ? document.body.scrollTop : window.scrollY);
+const scrollTo = (y) => {
+  if (IS_TOOLBAR_POPUP) document.body.scrollTop = y;
+  else window.scrollTo(0, y);
+};
+const viewHeight = () => (IS_TOOLBAR_POPUP ? document.body.clientHeight : window.innerHeight);
+const maxScroll = () => (IS_TOOLBAR_POPUP ? document.body.scrollHeight : document.documentElement.scrollHeight) - viewHeight();
 
 let queue = Promise.resolve();
 function enqueue(fn) {
@@ -68,7 +80,9 @@ function renderBar() {
     <button class="icon-btn" data-act="settings" aria-label="Reminders and settings">${icon("gear")}</button>`;
 }
 
-window.addEventListener("scroll", () => bar.classList.toggle("is-scrolled", window.scrollY > 4), { passive: true });
+const onPageScroll = () => bar.classList.toggle("is-scrolled", scrollTop() > 4);
+if (IS_TOOLBAR_POPUP) document.body.addEventListener("scroll", onPageScroll, { passive: true });
+else window.addEventListener("scroll", onPageScroll, { passive: true });
 
 /* ------------------------------------------------------------------ */
 /* First scan                                                          */
@@ -267,7 +281,7 @@ function snapshot() {
   const map = new Map();
   for (const el of app.querySelectorAll("[data-flip]")) {
     const r = el.getBoundingClientRect();
-    if (r.height) map.set(el.dataset.flip, r.top + window.scrollY);
+    if (r.height) map.set(el.dataset.flip, r.top + scrollTop());
   }
   return map;
 }
@@ -279,7 +293,7 @@ function playFlip(before, { skip, duration = 600 } = {}) {
     if (key === skip) continue;
     const r = el.getBoundingClientRect();
     if (!r.height) continue;
-    const top = r.top + window.scrollY;
+    const top = r.top + scrollTop();
     if (before.has(key)) {
       const dy = before.get(key) - top;
       if (Math.abs(dy) > 0.5) {
@@ -297,18 +311,17 @@ function easeInOut(p) {
 }
 
 function animateScroll(to, duration) {
-  const max = document.documentElement.scrollHeight - window.innerHeight;
-  const target = Math.max(0, Math.min(max, to));
-  const from = window.scrollY;
+  const target = Math.max(0, Math.min(maxScroll(), to));
+  const from = scrollTop();
   if (!duration || reduced() || Math.abs(target - from) < 2) {
-    window.scrollTo(0, target);
+    scrollTo(target);
     return Promise.resolve();
   }
   return new Promise((resolve) => {
     const t0 = performance.now();
     const step = (t) => {
       const p = Math.min(1, (t - t0) / duration);
-      window.scrollTo(0, from + (target - from) * easeInOut(p));
+      scrollTo(from + (target - from) * easeInOut(p));
       if (p < 1) requestAnimationFrame(step);
       else resolve();
     };
@@ -319,8 +332,8 @@ function animateScroll(to, duration) {
 function ensureVisible(el, ratio = 0.38, duration = 460) {
   const r = el.getBoundingClientRect();
   const topSafe = bar.offsetHeight + 12;
-  if (r.top >= topSafe && r.bottom <= window.innerHeight - 24) return Promise.resolve();
-  return animateScroll(window.scrollY + r.top - window.innerHeight * ratio, duration);
+  if (r.top >= topSafe && r.bottom <= viewHeight() - 24) return Promise.resolve();
+  return animateScroll(scrollTop() + r.top - viewHeight() * ratio, duration);
 }
 
 function flashEnter() {
@@ -360,7 +373,7 @@ async function animateMove(itemId) {
   moving.classList.add("is-travelling");
 
   const rect = moving.getBoundingClientRect();
-  const dy = before.get(`r-${itemId}`) - (rect.top + window.scrollY);
+  const dy = before.get(`r-${itemId}`) - (rect.top + scrollTop());
   const duration = Math.min(1050, Math.max(700, 520 + Math.abs(dy) * 0.45));
   playFlip(before, { skip: `r-${itemId}`, duration: duration * 0.85 });
   const travel = moving.animate(
@@ -372,7 +385,7 @@ async function animateMove(itemId) {
     ],
     { duration, easing: EASE_IN_OUT }
   );
-  animateScroll(window.scrollY + rect.top - window.innerHeight * 0.42, duration);
+  animateScroll(scrollTop() + rect.top - viewHeight() * 0.42, duration);
   await travel.finished.catch(() => {});
 
   moving.classList.remove("is-travelling");
@@ -507,7 +520,7 @@ async function sweepTo(render) {
 /* ------------------------------------------------------------------ */
 
 function setView(next) {
-  if (view === "list" && next !== "list") listScroll = window.scrollY;
+  if (view === "list" && next !== "list") listScroll = scrollTop();
   view = next;
   renderBar();
 }
@@ -523,7 +536,7 @@ function showList({ entrance = false } = {}) {
   setView("list");
   renderList();
   if (entrance) {
-    window.scrollTo(0, 0);
+    scrollTo(0);
     flashEnter();
   }
 }
@@ -538,7 +551,7 @@ function showScan() {
 
 async function openSettings() {
   setView("settings");
-  window.scrollTo(0, 0);
+  scrollTo(0);
   await mountSettings(app, {
     courses: state.courses,
     context: "panel",
@@ -548,7 +561,7 @@ async function openSettings() {
 
 function closeSettings() {
   route();
-  if (view === "list") window.scrollTo(0, listScroll);
+  if (view === "list") scrollTo(listScroll);
   if (state.scan.status === "idle" && !state.deletedAt) send("panel:opened");
 }
 
@@ -730,6 +743,7 @@ setInterval(() => {
   if (!PREVIEW && (state.scan.status === "idle" || state.scan.status === "running") && !state.deletedAt) send("panel:opened");
   // The last check couldn't read Learn: try again now that the student is looking.
   if (!PREVIEW && state.scan.status === "done" && state.stale) send("panel:check");
+  isArcPage(document).then((arc) => arc && send("env:arc"));
 })();
 
 window.addEventListener("online", () => {

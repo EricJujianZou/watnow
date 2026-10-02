@@ -62,6 +62,27 @@
     })
     .catch(() => {});
 
+  const ARC_VARS = ["--arc-palette-title", "--arc-palette-background"];
+  function arcVarsPresent() {
+    const style = getComputedStyle(document.documentElement);
+    return ARC_VARS.every((name) => style.getPropertyValue(name).trim());
+  }
+  function reportArc() {
+    if (!arcVarsPresent()) return;
+    chrome.runtime.sendMessage({ type: "env:arc" }).catch(() => {});
+  }
+  if (arcVarsPresent()) reportArc();
+  else {
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      if (arcVarsPresent()) {
+        clearInterval(timer);
+        reportArc();
+      } else if (tries >= 12) clearInterval(timer);
+    }, 250);
+  }
+
   if (!isMock) return;
 
   async function sendData() {

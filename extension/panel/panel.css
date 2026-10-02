@@ -4,6 +4,22 @@ body {
   min-width: 320px;
 }
 
+html.is-popup body {
+  width: 400px;
+  height: 590px;
+  overflow-y: auto;
+}
+
+html.is-dock {
+  height: 100%;
+}
+
+html.is-dock body {
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
 /* ---------- Top bar ---------- */
 .bar {
   position: sticky;
