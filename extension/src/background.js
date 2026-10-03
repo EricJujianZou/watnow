@@ -450,6 +450,10 @@ function mergeLive(prevItems, fresh, { failed, readOk, courseIds }, now = new Da
         item.handIn = p.handIn;
         item.handInAt = p.handInAt;
       }
+    } else if (p.status === "open" && f.status === "open" && p.handIn) {
+      // A check-off still being asked about, or one the site turned down.
+      item.handIn = p.handIn;
+      item.handInAt = p.handInAt;
     }
     if (Date.parse(p.dueAt) !== Date.parse(f.dueAt)) {
       const fieldChanged = p.dueField && f.dueField && p.dueField !== f.dueField;
@@ -1158,52 +1162,57 @@ async function toggleDone(itemId) {
   await mutate((st) => {
     const item = st.items.find((i) => i.id === itemId);
     if (!item || item.status === "submitted") return;
-    item.status = item.status === "done" ? "open" : "done";
-    item.completedAt = item.status === "done" ? nowIso() : null;
+    // One check at a time; a check that never came back (the worker stopped) expires after a minute.
+    if (item.handIn === "checking" && Date.now() - Date.parse(item.handInAt) < 60 * 1000) return;
     delete item.handIn;
     delete item.handInAt;
-    // People check things off right after clicking submit, and sometimes the
-    // file never went in. Ask the site while they're still looking.
-    if (item.status === "done" && settings.mode === "live" && canConfirm(item)) {
+    // A dropbox, quiz or Crowdmark item is only checked off once the site
+    // shows it handed in, so ask before changing anything.
+    if (item.status === "open" && settings.mode === "live" && canConfirm(item)) {
       item.handIn = "checking";
       item.handInAt = nowIso();
       ask = { ...item };
+      return;
     }
+    item.status = item.status === "done" ? "open" : "done";
+    item.completedAt = item.status === "done" ? nowIso() : null;
     st.seq += 1;
     st.lastEvent = { type: item.status === "done" ? "marked" : "unmarked", itemId, seq: st.seq, at: nowIso() };
   });
+  if (ask) {
+    await confirmHandIn(settings, ask);
+    return { ok: true };
+  }
   await refreshBadge();
   await scheduleReminders();
-  if (ask) confirmHandIn(settings, ask);
   return { ok: true };
 }
 
 /**
- * Right after a check-off, asks Learn or Crowdmark whether anything is handed
- * in. A yes turns the row into Submitted. A no leaves it checked off with a
- * warning. No answer drops the "checking" line and shows nothing.
+ * Asks Learn or Crowdmark whether anything is handed in before a check-off.
+ * A yes turns the row into Submitted. A no leaves it open with a note that
+ * the site shows no submission. No answer (offline, Learn down) checks it off,
+ * since there's nothing to go on.
  */
 async function confirmHandIn(settings, item) {
   const check = await askSubmitted(settings, item).catch(() => null);
   await mutate((st) => {
     const it = st.items.find((i) => i.id === item.id);
-    if (!it || it.status !== "done" || it.handIn !== "checking") return;
-    if (check && check.submitted) {
-      it.status = "submitted";
-      it.completedAt = check.at || nowIso();
-      delete it.handIn;
-      delete it.handInAt;
-      st.seq += 1;
-      st.lastEvent = { type: "submitted", itemId: it.id, seq: st.seq, at: nowIso() };
-    } else if (check) {
-      it.handIn = "missing";
+    if (!it || it.status !== "open" || it.handIn !== "checking") return;
+    delete it.handIn;
+    delete it.handInAt;
+    if (check && !check.submitted) {
+      it.handIn = "blocked";
       it.handInAt = nowIso();
-    } else {
-      delete it.handIn;
-      delete it.handInAt;
+      return;
     }
+    it.status = check ? "submitted" : "done";
+    it.completedAt = (check && check.at) || nowIso();
+    st.seq += 1;
+    st.lastEvent = { type: check ? "submitted" : "marked", itemId: it.id, seq: st.seq, at: nowIso() };
   });
   await refreshBadge();
+  await scheduleReminders();
 }
 
 /* ------------------------------------------------------------------ */

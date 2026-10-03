@@ -78,6 +78,12 @@
 
   6. Quizzes and discussions (for items the myItems feed misses)
      GET /d2l/api/le/{le}/{orgUnitId}/quizzes/          DueDate or EndDate (UW sets only EndDate), StartDate
+     GET /d2l/api/le/{le}/{orgUnitId}/quizzes/{quizId}/attempts/?userId={me}   (le 1.82+)
+       ObjectListPage of QuizAttemptData { AttemptId, UserId, Started, Completed|null, ... }.
+       An attempt with Completed set means submitted. Whether students may read
+       their own attempts is undocumented (VERIFY); a 403 turns it off for the
+       run and quizzes fall back to the completions feed, which only lists
+       quizzes linked in Content with completion tracking on.
      GET /d2l/api/le/{le}/{orgUnitId}/discussions/forums/
      GET /d2l/api/le/{le}/{orgUnitId}/discussions/forums/{forumId}/topics/
        DueDate, then UnlockEndDate, then the older EndDate. UnlockStartDate is opensAt.
@@ -329,6 +335,18 @@ function endpointName(path) {
 /* ------------------------------------------------------------------ */
 /* Item helpers                                                        */
 /* ------------------------------------------------------------------ */
+
+/** "1.82" >= "1.9"? Compares dotted versions part by part. */
+function versionAtLeast(v, min) {
+  const a = String(v).split(".").map(Number);
+  const b = String(min).split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
 
 const listOf = (x) => (Array.isArray(x) ? x : x && Array.isArray(x.Objects) ? x.Objects : x && Array.isArray(x.Items) ? x.Items : []);
 
@@ -735,6 +753,7 @@ export class LiveSource {
       const first = String(me.FirstName || "").trim();
       const last = String(me.LastName || "").trim();
       const initials = `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
+      if (NUMERIC_ID.test(String(me.Identifier ?? ""))) this.userId = String(me.Identifier);
       this.personal = [`${first} ${last}`, first, last, String(me.UniqueName || ""), String(me.Identifier || "")]
         .filter((x) => x.trim().length > 1)
         .sort((a, b) => b.length - a.length);
@@ -1117,9 +1136,47 @@ export class LiveSource {
       const dueAt = isoOrNull(q.DueDate) || isoOrNull(q.EndDate);
       seen.sample(q.Name, { DueDate: q.DueDate ?? null, StartDate: q.StartDate ?? null, EndDate: q.EndDate ?? null }, !!dueAt);
       if (!dueAt) continue;
-      out.push({ kind: "quiz", sourceId: String(id), title: String(q.Name || "Quiz"), dueAt, dueField: fieldOf(q.DueDate), opensAt: laterOnly(isoOrNull(q.StartDate), dueAt), completedAt: null });
+      let completedAt = null;
+      try {
+        const done = await this.quizAttempts(ou, String(id), le);
+        if (done && done.submitted) completedAt = done.at;
+      } catch (e) {
+        if (e.code === "signed-out") throw e;
+      }
+      out.push({ kind: "quiz", sourceId: String(id), title: String(q.Name || "Quiz"), dueAt, dueField: fieldOf(q.DueDate), opensAt: laterOnly(isoOrNull(q.StartDate), dueAt), completedAt });
     }
     return out;
+  }
+
+  /**
+   * Reads the student's own attempts at one quiz. Resolves to
+   * { submitted: true, at } when an attempt is completed, { submitted: false }
+   * when none is, or null when Learn won't say (older Learn, or students can't
+   * read attempts here, which turns the route off for the rest of this run).
+   */
+  async quizAttempts(ou, quizId, le, via = this.via) {
+    if (this.quizAttemptsOff || !versionAtLeast(le, "1.82")) return null;
+    if (!this.userId) await this.whoami(via);
+    if (!this.userId) return null;
+    let rows;
+    try {
+      rows = listOf(await this.api(`/d2l/api/le/${le}/${ou}/quizzes/${quizId}/attempts/?userId=${this.userId}`, { via }));
+    } catch (e) {
+      if (e.code === "forbidden" || e.code === "not-found" || e.code === "http") {
+        if (e.code !== "not-found") {
+          this.quizAttemptsOff = true;
+          this.report.notes.push(`quiz attempts unavailable (${e.status}), using the completions feed`);
+        }
+        return null;
+      }
+      throw e;
+    }
+    const done = rows
+      .filter((a) => a && (a.UserId == null || String(a.UserId) === this.userId))
+      .map((a) => isoOrNull(a.Completed))
+      .filter(Boolean)
+      .sort();
+    return done.length ? { submitted: true, at: done.pop() } : { submitted: false };
   }
 
   async readDiscussions(course, le, rep) {
@@ -1366,7 +1423,10 @@ export class LiveSource {
           }
           return dates.length ? { submitted: true, at: dates.sort().pop() } : { submitted: false };
         }
-        // Quizzes: Learn's completions feed for this one course.
+        // Quizzes: the student's own attempts, then Learn's completions feed
+        // for this one course when attempts can't be read.
+        const attempts = await this.quizAttempts(ou, sourceId, le, via);
+        if (attempts) return attempts;
         const { from } = this.window();
         const q = new URLSearchParams({ orgUnitIdsCSV: String(ou), completedFromDateTime: from, completedToDateTime: utcDateTime(Date.now() + DAY_MS) });
         const rows = [];

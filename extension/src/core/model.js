@@ -138,12 +138,14 @@ export function rowView(item, course, now) {
 }
 
 /**
- * "checking" while WATnow asks whether a checked-off item was handed in,
- * "missing" when the answer was no. A check that never finished (the browser
- * closed mid-ask) stops showing after a minute.
+ * "checking" while WATnow asks whether an item being checked off was handed
+ * in, "blocked" when the answer was no and it stayed open. "missing" is the
+ * older warning on an item checked off before the site was asked. A check
+ * that never finished (the browser closed mid-ask) stops showing after a minute.
  */
 function handInView(item, now) {
-  if (item.status !== "done" || !item.handIn) return null;
+  if (!item.handIn || item.status === "submitted") return null;
+  if (item.status === "open" && item.handIn === "missing") return null;
   if (item.handIn === "checking" && now - Date.parse(item.handInAt) > 60 * 1000) return null;
   return item.handIn;
 }

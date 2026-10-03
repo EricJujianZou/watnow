@@ -252,8 +252,8 @@ function rowHTML(r) {
     ? `<span class="moved">${icon("arrow", 16)}<span>Moved from <span class="was">${esc(r.movedFrom)}</span></span></span>`
     : "";
   return `
-  <li class="row tone-${r.tone} hl-${r.color}${r.movedFrom ? " is-moved" : ""}${r.handIn === "missing" ? " is-unsent" : ""}" data-id="${esc(r.id)}" data-flip="r-${esc(r.id)}">
-    <button class="check" data-act="toggle" data-id="${esc(r.id)}" aria-pressed="${done}" ${r.status === "submitted" ? 'aria-disabled="true"' : ""} aria-label="${esc(checkLabel)}">
+  <li class="row tone-${r.tone} hl-${r.color}${r.movedFrom ? " is-moved" : ""}${r.handIn === "missing" || r.handIn === "blocked" ? " is-unsent" : ""}" data-id="${esc(r.id)}" data-flip="r-${esc(r.id)}">
+    <button class="check" data-act="toggle" data-id="${esc(r.id)}" aria-pressed="${done}" ${r.status === "submitted" || r.handIn === "checking" ? 'aria-disabled="true"' : ""} aria-label="${esc(checkLabel)}">
       <span class="check-ring">${icon("check", 14, "check-mark")}</span>
     </button>
     <button class="row-open" data-act="open" data-id="${esc(r.id)}">
@@ -273,15 +273,16 @@ function rowHTML(r) {
   </li>`;
 }
 
-/** Under a checked-off row: asking the site, or the site shows nothing handed in. */
+/** Under a row being checked off: asking the site, or the site shows nothing handed in. */
 function handInHTML(r) {
   const site = r.kind === "crowdmark" ? "Crowdmark" : lms();
   if (r.handIn === "checking") {
     return `<p class="handin is-checking" role="status"><span class="handin-bar" aria-hidden="true"></span><span>Checking ${esc(site)} for your submission</span></p>`;
   }
-  if (r.handIn !== "missing") return "";
+  if (r.handIn !== "missing" && r.handIn !== "blocked") return "";
   const where = r.kind === "crowdmark" ? "Crowdmark" : r.kind === "quiz" ? "quiz" : "dropbox";
-  return `<p class="handin is-missing" role="status">${icon("alert", 16)}<span>${esc(site)} doesn't show a submission for this yet.</span>
+  const why = r.handIn === "blocked" ? `${site} doesn't show a submission for this, so it can't be checked off yet.` : `${site} doesn't show a submission for this yet.`;
+  return `<p class="handin is-missing" role="status">${icon("alert", 16)}<span>${esc(why)}</span>
     <button class="handin-open" data-act="open" data-id="${esc(r.id)}">Open ${where}</button></p>`;
 }
 
