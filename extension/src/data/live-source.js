@@ -84,6 +84,9 @@
        their own attempts is undocumented (VERIFY); a 403 turns it off for the
        run and quizzes fall back to the completions feed, which only lists
        quizzes linked in Content with completion tracking on.
+     GET /d2l/lms/quizzing/user/quiz_summary.d2l?qi={quizId}&ou={orgUnitId}   (HTML, the student's own quiz page)
+       Read when attempts don't show a completed one. "Attempts ... Completed - N"
+       is the count the student sees; N > 0 means submitted. Only that number is kept.
      GET /d2l/api/le/{le}/{orgUnitId}/discussions/forums/
      GET /d2l/api/le/{le}/{orgUnitId}/discussions/forums/{forumId}/topics/
        DueDate, then UnlockEndDate, then the older EndDate. UnlockStartDate is opensAt.
@@ -1138,14 +1141,72 @@ export class LiveSource {
       if (!dueAt) continue;
       let completedAt = null;
       try {
-        const done = await this.quizAttempts(ou, String(id), le);
-        if (done && done.submitted) completedAt = done.at;
+        // The quiz page is only read for quizzes still open or just closed, to keep syncs light.
+        const recent = Date.parse(dueAt) >= this.now.getTime() - DAY_MS;
+        const done = await this.quizDone(ou, String(id), le, this.via, recent);
+        if (done && done.submitted) completedAt = done.at || this.now.toISOString();
       } catch (e) {
         if (e.code === "signed-out") throw e;
       }
       out.push({ kind: "quiz", sourceId: String(id), title: String(q.Name || "Quiz"), dueAt, dueField: fieldOf(q.DueDate), opensAt: laterOnly(isoOrNull(q.StartDate), dueAt), completedAt });
     }
     return out;
+  }
+
+  /**
+   * Whether one quiz is submitted: the attempts route first, then the quiz's
+   * own summary page (when withPage) if attempts show nothing completed.
+   * Resolves like quizAttempts.
+   */
+  async quizDone(ou, quizId, le, via = this.via, withPage = false) {
+    const attempts = await this.quizAttempts(ou, quizId, le, via);
+    if ((attempts && attempts.submitted) || !withPage || this.quizPageOff) return attempts;
+    const n = await this.quizPageCompleted(ou, quizId, via);
+    if (n == null) return attempts;
+    return n > 0 ? { submitted: true, at: null } : { submitted: false };
+  }
+
+  /**
+   * The "Completed - N" count from the quiz's summary page, or null when the
+   * page can't be read or doesn't have it. Only the worker reads it.
+   */
+  async quizPageCompleted(ou, quizId, via) {
+    if (via !== "worker") return null;
+    const path = `/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${quizId}&ou=${ou}`;
+    const gap = GAP_MS - (Date.now() - this.lastAt);
+    if (gap > 0) await wait(gap);
+    this.lastAt = Date.now();
+    const entry = { endpoint: endpointName(path), path: path.split("?")[0], via, status: null };
+    this.report.requests.push(entry);
+    let text;
+    try {
+      const res = await fetch(this.base + path, { credentials: "include", headers: { Accept: "text/html" }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      entry.status = res.status;
+      if (/\/d2l\/login/i.test(res.url || "")) {
+        const err = new Error("Learn says nobody is signed in.");
+        err.code = "signed-out";
+        throw err;
+      }
+      if (!res.ok) {
+        entry.error = "http";
+        return null;
+      }
+      text = await res.text();
+    } catch (e) {
+      if (e.code === "signed-out") throw e;
+      entry.error = "network";
+      return null;
+    }
+    const plain = text.replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+    const m = plain.match(/\bCompleted\s*[-\u2013\u2014:]\s*(\d+)/i);
+    if (!m) {
+      // Learn changed the page or shows it in another language; stop asking this run.
+      this.quizPageOff = true;
+      this.report.notes.push("quiz summary page has no completed count");
+      return null;
+    }
+    entry.count = Number(m[1]);
+    return Number(m[1]);
   }
 
   /**
@@ -1423,9 +1484,9 @@ export class LiveSource {
           }
           return dates.length ? { submitted: true, at: dates.sort().pop() } : { submitted: false };
         }
-        // Quizzes: the student's own attempts, then Learn's completions feed
-        // for this one course when attempts can't be read.
-        const attempts = await this.quizAttempts(ou, sourceId, le, via);
+        // Quizzes: the student's own attempts or quiz page, then Learn's
+        // completions feed for this one course when neither can be read.
+        const attempts = await this.quizDone(ou, sourceId, le, via, true);
         if (attempts) return attempts;
         const { from } = this.window();
         const q = new URLSearchParams({ orgUnitIdsCSV: String(ou), completedFromDateTime: from, completedToDateTime: utcDateTime(Date.now() + DAY_MS) });
