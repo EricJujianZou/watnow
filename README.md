@@ -6,11 +6,11 @@
 
 **All your Learn deadlines in one side panel, updated when profs move dates, with reminders before things close.**
 
-A Chrome extension for University of Waterloo students.
+A browser extension for University of Waterloo students, for Chrome and for Firefox.
 
-[Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
+[Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; Firefox Add-ons (listing pending) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
 
-![manifest v3](https://img.shields.io/badge/Chrome-Manifest_V3-FFE45C?style=flat-square&labelColor=17181C)
+![manifest v3](https://img.shields.io/badge/Manifest_V3-Chrome_+_Firefox-FFE45C?style=flat-square&labelColor=17181C)
 ![license](https://img.shields.io/badge/license-MIT-FFE45C?style=flat-square&labelColor=17181C)
 ![installs](https://img.shields.io/badge/installs-861-FFE45C?style=flat-square&labelColor=17181C)
 
@@ -22,8 +22,8 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 
 ## What you get
 
-- Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on Learn.
-- WATnow rereads Learn every 30 minutes while Chrome is open. When a prof pushes a due date, the item shows the new date highlighted with the old one crossed out underneath, so you never have to go back and correct a calendar by hand.
+- Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on Learn. On Chrome the list lives in the side panel, on Firefox in the sidebar.
+- WATnow rereads Learn every 30 minutes while your browser is open. When a prof pushes a due date, the item shows the new date highlighted with the old one crossed out underneath, so you never have to go back and correct a calendar by hand.
 - Assignments, labs, quizzes and discussions each get their own reminder lead time, anywhere from seven days before the due date to the morning it's due. Reminders stop once Learn shows you submitted, or once you tick the item off yourself.
 - The panel still works when Learn is down or your laptop is offline. It keeps showing the list it last read and keeps your reminders, then tries again at the next check.
 
@@ -44,14 +44,14 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 </tr>
 <tr>
 <td>The list runs from overdue items down to the weeks ahead, and the card at the top says how much is actually due.</td>
-<td>The panel follows your Chrome theme, or you can pin it to light or dark.</td>
+<td>The panel follows your browser theme, or you can pin it to light or dark.</td>
 </tr>
 </table>
 
 
 ## Usage
 
-These numbers come from the anonymous install counts described under "What it does with your data". They were last updated on September 27, 2026.
+These numbers come from the anonymous install counts described under "What it does with your data", so they are Chrome only. They were last updated on September 27, 2026.
 
 - 861 people have installed WATnow.
 - 735 of them opened it in the last 7 days.
@@ -61,7 +61,9 @@ The user count on the Chrome Web Store runs a few days behind these numbers.
 
 ## Install
 
-Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). Then sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in.
+Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). The Firefox build, for Firefox, Nightly, Zen, LibreWolf and other Firefox-based browsers, is not on addons.mozilla.org yet; until it is, build it from this repo with the steps under "Running it from this repo". Then sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in.
+
+Firefox for Android is not supported, because extensions cannot open a sidebar there.
 
 ## What it does with your data
 
@@ -70,7 +72,8 @@ This repo is public so you can read exactly what the extension does with your Le
 - It reads Learn from inside your browser, using the session you're already signed in with. It never sees your password.
 - It only sends GET requests to `learn.uwaterloo.ca/d2l/api/`, so it can't change anything on Learn.
 - Your courses, deadlines and settings are saved in your browser's extension storage on your own computer.
-- The only thing it sends anywhere is an anonymous count: once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from Learn. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
+- The Chrome build sends one thing: an anonymous count, once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from Learn. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
+- The Firefox build sends nothing at all. That is what the `data_collection_permissions` of `none` in the manifest means, and `usage.js` returns early on Firefox.
 
 The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
@@ -78,7 +81,13 @@ The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
 This section is for developers. Most people should use the Chrome Web Store link above, which also keeps the extension updated.
 
-`extension/` is the same build that goes to the Chrome Web Store: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
+`extension/` is the same build that goes to the stores: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. One folder serves both browsers, so its `manifest.json` carries both sets of keys (`service_worker` and `scripts`, `side_panel` and `sidebar_action`) and the code picks between them at runtime in [`extension/src/core/env.js`](extension/src/core/env.js). Each browser ignores the other's keys with a warning.
+
+**Chrome.** Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
+
+**Firefox.** Either `npm install && npm run dev:ff`, which opens a clean profile with the extension loaded and reloads it as you edit, or go to `about:debugging#/runtime/this-firefox` and use **Load Temporary Add-on** on `extension/manifest.json`. Expect three manifest warnings there about the Chrome-only keys.
+
+**Packaging.** `npm run build:ff` and `npm run build:chrome` stage `dist/firefox` and `dist/chrome` with a manifest holding only that browser's keys ([`tools/pack.mjs`](tools/pack.mjs)) and zip them for the stores. `npm run lint:ff` runs `web-ext lint` over the staged Firefox build.
 
 ---
 

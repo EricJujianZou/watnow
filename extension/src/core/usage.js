@@ -1,7 +1,10 @@
-// Anonymous usage counts for the store build, so we can see how many people
-// install WATnow and whether they keep opening it. Every event carries a random
-// install ID, the version, the install date and how many days old the install
-// is. Nothing from Learn is ever included. Demo builds send nothing.
+// Anonymous usage counts for the Chrome Web Store build, so we can see how many
+// people install WATnow and whether they keep opening it. Every event carries a
+// random install ID, the version, the install date and how many days old the
+// install is. Nothing from Learn is ever included. Demo builds send nothing.
+//
+// Firefox-based browsers send nothing at all, which is what the manifest's
+// data_collection_permissions "none" says on addons.mozilla.org. See fromStore.
 //
 // Three events:
 //   install      once, when Chrome installs the extension
@@ -13,6 +16,7 @@
 //                the retention curve is the list of numbers.
 
 import { TESTER_BUILD } from "./build.js";
+import { IS_GECKO } from "./env.js";
 
 const UMAMI_URL = "https://cloud.umami.is/api/send";
 // Shared with ugmi.ca. Filter Umami by the watnow tag or the hostname below.
@@ -51,8 +55,12 @@ async function usageRecord() {
  *  so this keeps development installs on our own machines out of the counts.
  *  Every uninstall wipes local storage, so a reinstall is a new install ID and
  *  reads as a new person. There is no way around that and no reason to want
- *  one, but it does mean a developer reinstalling all day inflates everything. */
+ *  one, but it does mean a developer reinstalling all day inflates everything.
+ *
+ *  Always false on Firefox-based browsers: that build counts nothing, so there
+ *  is no Firefox retention curve and nothing leaves the computer. */
 function fromStore() {
+  if (IS_GECKO) return false;
   return Boolean(chrome.runtime.getManifest().update_url);
 }
 

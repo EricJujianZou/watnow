@@ -1,0 +1,18 @@
+{
+  "name": "watnow",
+  "version": "1.0.5",
+  "private": true,
+  "description": "WATnow: all your Learn deadlines in one side panel. Chrome and Firefox builds from one source.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev:ff": "web-ext run --source-dir extension --target firefox-desktop",
+    "dev:nightly": "web-ext run --source-dir extension --target firefox-desktop --firefox nightly",
+    "lint:ff": "node tools/pack.mjs firefox && web-ext lint --source-dir dist/firefox",
+    "build:ff": "node tools/pack.mjs firefox && web-ext build --source-dir dist/firefox --artifacts-dir dist --overwrite-dest --filename watnow-firefox-{version}.zip",
+    "build:chrome": "node tools/pack.mjs chrome && web-ext build --source-dir dist/chrome --artifacts-dir dist --overwrite-dest --filename watnow-chrome-{version}.zip"
+  },
+  "devDependencies": {
+    "web-ext": "^8.5.0"
+  }
+}

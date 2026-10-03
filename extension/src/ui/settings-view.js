@@ -2,6 +2,7 @@
 
 import { getSettings, setSettings } from "../core/store.js";
 import { TESTER_BUILD } from "../core/build.js";
+import { IS_GECKO } from "../core/env.js";
 import { LEADS, REMINDER_TYPES } from "../core/reminders.js";
 import { icon, esc } from "./icons.js";
 
@@ -18,11 +19,21 @@ const SOURCE_HELP = {
 
 const DEBUG_LINK = "Found a bug? Send Eric the debug report via Instagram @sleppyeric and he'll buy you a coffee :)";
 
+// Chrome can keep running after its last window closes, so reminders can still
+// go out. Gecko has no such setting, so that half of the note is dropped there.
 const BACKGROUND_STEPS = [
   "Open the three dot menu at the top right of Chrome.",
   "Choose Settings, then System in the left sidebar.",
   "Turn on Continue running background apps when Google Chrome is closed.",
 ];
+
+function remindersNote() {
+  if (IS_GECKO) {
+    return `<p class="note">${icon("info", 18)}<span>Notifications only show while your browser is open.</span></p>`;
+  }
+  return `<p class="note">${icon("info", 18)}<span>Notifications only show while Chrome is open. To keep getting them after you close every Chrome window, turn on <button class="tip-btn" data-act="bg-tip" aria-expanded="false">Continue running background apps</button> in Chrome's system settings.</span></p>
+      <div data-bg-tip></div>`;
+}
 
 function sourceSection(s) {
   const mode = s.mode === "live" ? "live" : "demo";
@@ -88,8 +99,7 @@ function template(s, courses, context) {
       <h3>I want reminders for these courses</h3>
       ${courseList}
 
-      <p class="note">${icon("info", 18)}<span>Notifications only show while Chrome is open. To keep getting them after you close every Chrome window, turn on <button class="tip-btn" data-act="bg-tip" aria-expanded="false">Continue running background apps</button> in Chrome's system settings.</span></p>
-      <div data-bg-tip></div>
+      ${remindersNote()}
     </section>
 
     <section class="set-section" aria-labelledby="set-look">

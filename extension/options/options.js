@@ -4,6 +4,7 @@ import { DEMO_SCRIPT, COURSES, ITEMS } from "../src/data/fixtures.js";
 import { brandMark, esc } from "../src/ui/icons.js";
 import { fmtAgo } from "../src/core/dates.js";
 import { TESTER_BUILD } from "../src/core/build.js";
+import { IS_GECKO } from "../src/core/env.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const page = document.getElementById("page");
@@ -118,8 +119,12 @@ async function render() {
             )
             .join("")}
         </ul>
-        <p class="set-help" style="margin-top:14px">If a shortcut is missing or another app already uses it, change it on Chrome's shortcuts page.</p>
-        <button class="btn btn-quiet btn-sm" data-act="shortcuts">Open shortcut settings</button>
+        <p class="set-help" style="margin-top:14px">${
+          IS_GECKO
+            ? "If a shortcut is missing or another app already uses it, change it in Add-ons and themes, under the gear menu, Manage Extension Shortcuts."
+            : "If a shortcut is missing or another app already uses it, change it on Chrome's shortcuts page."
+        }</p>
+        ${IS_GECKO ? "" : '<button class="btn btn-quiet btn-sm" data-act="shortcuts">Open shortcut settings</button>'}
       </section>
 
       <section class="set-section" aria-labelledby="src-h">
@@ -166,7 +171,8 @@ page.addEventListener("click", async (e) => {
     setTimeout(() => (status.textContent = ""), 5000);
     return;
   }
-  if (t.dataset.act === "shortcuts") chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
+  // Gecko has no openable shortcuts URL, so that button is not rendered there.
+  if (t.dataset.act === "shortcuts" && !IS_GECKO) chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
   if (t.dataset.act === "copy-debug") {
     const status = page.querySelector("[data-debug-status]");
     const { liveDebug } = await chrome.storage.local.get("liveDebug");

@@ -10,6 +10,7 @@ import { DEMO_SCRIPT } from "./data/fixtures.js";
 import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
 import { plannedReminders, reminderCopy, movedCopy } from "./core/reminders.js";
 import { pingInstall, pingDayActive } from "./core/usage.js";
+import { IS_GECKO, HAS_SIDE_PANEL, HAS_SIDEBAR } from "./core/env.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -38,10 +39,14 @@ const nowIso = () => new Date().toISOString();
 /* ------------------------------------------------------------------ */
 
 async function setup() {
-  try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  } catch (e) {
-    console.warn("sidePanel behavior", e);
+  // Chrome: clicking the toolbar icon opens the side panel. Gecko has no
+  // sidePanel API, so there the action click toggles the sidebar (see below).
+  if (HAS_SIDE_PANEL) {
+    try {
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    } catch (e) {
+      console.warn("sidePanel behavior", e);
+    }
   }
   await chrome.action.setBadgeBackgroundColor({ color: BADGE_BG });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
@@ -52,6 +57,20 @@ async function setup() {
   await scheduleReminders();
   chrome.alarms.create("tick", { periodInMinutes: 5 });
   await syncLiveAlarm();
+}
+
+// Gecko gives the sidebar its own button, but the action button is the one
+// that carries the badge, so its click toggles the sidebar. toggle() needs a
+// user gesture and an action click is one. This never fires on Chrome:
+// openPanelOnActionClick takes the click.
+if (!HAS_SIDE_PANEL && HAS_SIDEBAR) {
+  chrome.action.onClicked.addListener(() => {
+    try {
+      chrome.sidebarAction.toggle();
+    } catch (e) {
+      console.warn("sidebar toggle", e);
+    }
+  });
 }
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -632,13 +651,16 @@ async function refreshBadge() {
 
 async function notify(kind, itemId, copy, seq) {
   const id = `wn|${kind}|${itemId}|${seq || Date.now()}`;
-  await chrome.notifications.create(id, {
+  const options = {
     type: "basic",
     iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
     title: copy.title,
     message: copy.message,
-    priority: 2,
-  });
+  };
+  // Gecko accepts only those four and throws a type error on anything else,
+  // which would lose every reminder.
+  if (!IS_GECKO) options.priority = 2;
+  await chrome.notifications.create(id, options);
   return id;
 }
 
@@ -769,10 +791,18 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// Chrome says the network is back. Only fires while the worker is awake; the
-// 5 minute tick covers the rest.
+// The browser says the network is back. Only fires while the worker is awake;
+// the 5 minute tick covers the rest.
 self.addEventListener("online", () => {
   retryUnreachable({ wentOffline: false });
+});
+
+// Gecko lets the student take away access to Learn and give it back from the
+// extensions button. Giving it back reads Learn straight away, so they don't
+// have to find the retry button.
+chrome.permissions?.onAdded?.addListener(async (added) => {
+  if (!(added.origins || []).length || scanning) return;
+  if ((await getSettings()).mode === "live") runScan();
 });
 
 /* ------------------------------------------------------------------ */
