@@ -4,15 +4,15 @@
 
 # WATnow &nbsp;<a href="https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh"><img src="https://img.shields.io/badge/Chrome%20Web%20Store-Add%20to%20Chrome-FFE45C?style=flat-square&labelColor=17181C&logo=googlechrome&logoColor=white" alt="Add to Chrome from the Chrome Web Store"></a>
 
-**All your Learn deadlines in one side panel, updated when profs move dates, with reminders before things close.**
+**All your course deadlines in one side panel, updated when profs move dates, with reminders before things close.**
 
-A Chrome extension for University of Waterloo students.
+A Chrome extension for students at Waterloo, Guelph, Laurier, McMaster, Queen's, Western and TMU. It reads your school's Brightspace site, which Waterloo calls Learn.
 
 [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
 
 ![manifest v3](https://img.shields.io/badge/Chrome-Manifest_V3-FFE45C?style=flat-square&labelColor=17181C)
 ![license](https://img.shields.io/badge/license-MIT-FFE45C?style=flat-square&labelColor=17181C)
-![installs](https://img.shields.io/badge/installs-861-FFE45C?style=flat-square&labelColor=17181C)
+![installs](https://img.shields.io/badge/installs-1541-FFE45C?style=flat-square&labelColor=17181C)
 
 </div>
 
@@ -22,10 +22,11 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 
 ## What you get
 
-- Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on Learn.
-- WATnow rereads Learn every 30 minutes while Chrome is open. When a prof pushes a due date, the item shows the new date highlighted with the old one crossed out underneath, so you never have to go back and correct a calendar by hand.
-- Assignments, labs, quizzes and discussions each get their own reminder lead time, anywhere from seven days before the due date to the morning it's due. Reminders stop once Learn shows you submitted, or once you tick the item off yourself.
-- The panel still works when Learn is down or your laptop is offline. It keeps showing the list it last read and keeps your reminders, then tries again at the next check.
+- Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on your course site.
+- WATnow rereads your course site every 30 minutes while Chrome is open. When a prof pushes a due date, the item shows the new date highlighted with the old one crossed out underneath, so you never have to go back and correct a calendar by hand.
+- Assignments, labs, quizzes and discussions each get their own reminder lead time, anywhere from seven days before the due date to the morning it's due. Reminders stop once your course site shows you submitted, or once you tick the item off yourself.
+- Waterloo students can connect Crowdmark too, and its assignments show up in the same list under the matching course.
+- The panel still works when your course site is down or your laptop is offline. It keeps showing the list it last read and keeps your reminders, then tries again at the next check.
 
 ## What it looks like
 
@@ -51,26 +52,27 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 
 ## Usage
 
-These numbers come from the anonymous install counts described under "What it does with your data". They were last updated on September 27, 2026.
+These numbers come from the anonymous install counts described under "What it does with your data". They were last updated on October 3, 2026.
 
-- 861 people have installed WATnow.
-- 735 of them opened it in the last 7 days.
-- 37% opened it again the day after they installed it, and 54% came back on some later day.
+- 1,541 people have installed WATnow.
+- 1,070 of them opened it in the last 7 days.
+- 36% opened it again the day after they installed it, and 59% came back on some later day.
 
 The user count on the Chrome Web Store runs a few days behind these numbers.
 
 ## Install
 
-Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). Then sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in.
+Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). Click the WATnow icon in your toolbar and choose your school. Sign in to your course site if you aren't already, and the panel fills itself in.
 
 ## What it does with your data
 
-This repo is public so you can read exactly what the extension does with your Learn account before you install it.
+This repo is public so you can read exactly what the extension does with your school account before you install it.
 
-- It reads Learn from inside your browser, using the session you're already signed in with. It never sees your password.
-- It only sends GET requests to `learn.uwaterloo.ca/d2l/api/`, so it can't change anything on Learn.
+- It reads your course site from inside your browser, using the session you're already signed in with. It never sees your password.
+- It only sends GET requests to your school's `/d2l/api/`, and to Crowdmark's student API if you connect it, so it can't change anything on either site.
+- Chrome asks you before WATnow can read any school other than Waterloo, or Crowdmark.
 - Your courses, deadlines and settings are saved in your browser's extension storage on your own computer.
-- The only thing it sends anywhere is an anonymous count: once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from Learn. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
+- The only thing it sends anywhere is an anonymous count: once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from your courses. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
 
 The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
@@ -78,10 +80,10 @@ The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
 This section is for developers. Most people should use the Chrome Web Store link above, which also keeps the extension updated.
 
-`extension/` is the same build that goes to the Chrome Web Store: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
+`extension/` is the same build that goes to the Chrome Web Store: it reads live course sites only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
 
 ---
 
-WATnow is not affiliated with or endorsed by D2L or the University of Waterloo.
+WATnow is not affiliated with or endorsed by D2L, Crowdmark, or any of the universities above.
 
 Made by Eric Zou. Questions go to [eric@ugmi.ca](mailto:eric@ugmi.ca).

@@ -36,9 +36,7 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://learn.uwaterloo.ca/*",
-    "http://localhost:8080/*",
-    "http://127.0.0.1:8080/*"
+    "https://learn.uwaterloo.ca/*"
   ],
   "optional_host_permissions": [
     "https://courselink.uoguelph.ca/*",
@@ -53,34 +51,12 @@
   "content_scripts": [
     {
       "matches": [
-        "https://learn.uwaterloo.ca/*",
-        "http://localhost:8080/d2l/*",
-        "http://127.0.0.1:8080/d2l/*"
+        "https://learn.uwaterloo.ca/*"
       ],
       "js": [
         "src/content/learn-bridge.js"
       ],
       "run_at": "document_start"
     }
-  ],
-  "commands": {
-    "demo-move-date": {
-      "suggested_key": {
-        "default": "Alt+Shift+M"
-      },
-      "description": "Demo: a prof moves a due date"
-    },
-    "demo-reminder": {
-      "suggested_key": {
-        "default": "Alt+Shift+K"
-      },
-      "description": "Demo: send a reminder for something closing soon"
-    },
-    "demo-reset": {
-      "suggested_key": {
-        "default": "Alt+Shift+0"
-      },
-      "description": "Demo: reset to before the first scan"
-    }
-  }
+  ]
 }
