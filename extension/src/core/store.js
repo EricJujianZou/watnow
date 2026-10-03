@@ -10,6 +10,9 @@ export const DEFAULT_SETTINGS = {
   mode: TESTER_BUILD ? "live" : "demo",
   theme: "light",
   learnBase: TESTER_BUILD ? "https://learn.uwaterloo.ca" : "http://localhost:8080",
+  // LIVE only: which school's Brightspace to read, an id from core/schools.js.
+  // null until the student picks one on the panel's first screen.
+  school: null,
   // liveBaseOverride: set only by the local test harness, see liveBase() in live-source.js
   reminders: {
     // One lead per deadline type, the position of that type's slider.

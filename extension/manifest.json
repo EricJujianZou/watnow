@@ -3,7 +3,7 @@
   "name": "__MSG_appName__",
   "short_name": "__MSG_appName__",
   "description": "__MSG_appDescription__",
-  "version": "1.0.5",
+  "version": "1.2.0",
   "default_locale": "en",
   "minimum_chrome_version": "116",
   "icons": {
@@ -32,20 +32,55 @@
     "sidePanel",
     "storage",
     "notifications",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
-    "https://learn.uwaterloo.ca/*"
+    "https://learn.uwaterloo.ca/*",
+    "http://localhost:8080/*",
+    "http://127.0.0.1:8080/*"
+  ],
+  "optional_host_permissions": [
+    "https://courselink.uoguelph.ca/*",
+    "https://mylearningspace.wlu.ca/*",
+    "https://avenue.cllmcmaster.ca/*",
+    "https://onq.queensu.ca/*",
+    "https://westernu.brightspace.com/*",
+    "https://courses.torontomu.ca/*",
+    "https://courses.ryerson.ca/*",
+    "https://app.crowdmark.com/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://learn.uwaterloo.ca/*"
+        "https://learn.uwaterloo.ca/*",
+        "http://localhost:8080/d2l/*",
+        "http://127.0.0.1:8080/d2l/*"
       ],
       "js": [
         "src/content/learn-bridge.js"
       ],
       "run_at": "document_start"
     }
-  ]
+  ],
+  "commands": {
+    "demo-move-date": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "Demo: a prof moves a due date"
+    },
+    "demo-reminder": {
+      "suggested_key": {
+        "default": "Alt+Shift+K"
+      },
+      "description": "Demo: send a reminder for something closing soon"
+    },
+    "demo-reset": {
+      "suggested_key": {
+        "default": "Alt+Shift+0"
+      },
+      "description": "Demo: reset to before the first scan"
+    }
+  }
 }

@@ -12,7 +12,7 @@ export function applyTheme(theme) {
 }
 
 const SOURCE_HELP = {
-  live: "Reads your courses on learn.uwaterloo.ca with the session signed in on this browser.",
+  live: "Reads your courses from your school's course site with the session signed in on this browser.",
   demo: "Shows made-up courses from the demo. Nothing is read from Learn.",
 };
 
