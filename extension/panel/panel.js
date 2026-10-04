@@ -36,6 +36,9 @@ let cmAllowed = false;
 /** Set from the Connect click until Crowdmark reads or the student gives up, so the button can say Connecting. */
 let cmConnectingUntil = 0;
 const CM_CONNECT_WAIT_MS = 3 * 60 * 1000;
+/** Set when the browser refused access, so the button asks for it again instead of looking dead. */
+let cmDeniedUntil = 0;
+const CM_DENIED_MS = 8 * 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (type, extra = {}) => chrome.runtime.sendMessage({ type, ...extra }).catch(() => null);
@@ -128,6 +131,8 @@ function cmConnecting() {
 function cmButtonHTML(scan) {
   if (PREVIEW || scan !== "done" || !settings || settings.mode !== "live" || settings.school !== "uwaterloo") return "";
   if (cmConnecting()) return `<span class="btn btn-primary btn-sm cm-btn is-connecting" role="status">${icon("refresh", 16, "spin")}Connecting…</span>`;
+  // Access was refused. The button still connects, so one more select and an Allow is all it takes.
+  if (Date.now() < cmDeniedUntil) return `<button class="btn btn-primary btn-sm cm-btn" data-act="cm-connect">Allow access to connect</button>`;
   if (cmAllowed && !cmDown()) return `<span class="btn btn-quiet btn-sm cm-btn is-connected">Crowdmark Connected</span>`;
   return `<button class="btn btn-primary btn-sm cm-btn" data-act="cm-connect">Connect Crowdmark</button>`;
 }
@@ -137,22 +142,46 @@ async function refreshCm() {
   renderBar();
 }
 
-/** Asks Chrome for Crowdmark access, then reads. If access is already there, the student needs to sign in again. */
+/**
+ * Connect Crowdmark: gets access to Crowdmark if it isn't granted yet, then
+ * opens it so the student can sign in.
+ *
+ * One read is tried first, because a student already signed in on this browser
+ * is connected without needing a tab. Every other answer opens Crowdmark: not
+ * signed in, Crowdmark unreachable, or a browser that won't attach the session
+ * to a read from the background, which is every first connect on Gecko. In that
+ * last case the tab is what the background reads through, so opening it is the
+ * fix and not a fallback.
+ *
+ * "Connecting" stays up until that read lands (the background reads again as
+ * soon as a Crowdmark page finishes loading) or the wait runs out.
+ */
 async function connectCrowdmark() {
   const base = crowdmarkBase(settings);
   if (!cmAllowed) {
+    // permissions.request only works straight from the click, so nothing is awaited before it.
     const ok = await chrome.permissions.request({ origins: [`${base}/*`] }).catch(() => false);
-    if (!ok) return;
+    if (!ok) {
+      announce("WATnow needs access to Crowdmark to read its deadlines. Select Connect Crowdmark again and choose Allow.");
+      cmDeniedUntil = Date.now() + CM_DENIED_MS;
+      renderBar();
+      setTimeout(renderBar, CM_DENIED_MS);
+      return;
+    }
+    cmDeniedUntil = 0;
     cmAllowed = true;
   }
   cmConnectingUntil = Date.now() + CM_CONNECT_WAIT_MS;
   renderBar();
   const res = await chrome.runtime.sendMessage({ type: "crowdmark:connect" }).catch(() => null);
-  const status = res && res.status;
-  // Not signed in yet: open the sign-in page and keep saying Connecting. The
-  // background reads Crowdmark again as soon as the sign-in finishes.
-  if (status === "signed-out") chrome.tabs.create({ url: `${base}/sign-in/waterloo` });
-  else if (status !== "ok") cmConnectingUntil = 0;
+  if (res && res.status === "ok") {
+    // Connected. The stored status says so too, but don't sit on "Connecting"
+    // waiting for that write to come back.
+    cmConnectingUntil = 0;
+  } else {
+    announce("Sign in to Crowdmark in the tab that just opened, and WATnow will pick up your deadlines.");
+    chrome.tabs.create({ url: `${base}/sign-in/waterloo` });
+  }
   renderBar();
   if (view === "list") renderList();
 }
