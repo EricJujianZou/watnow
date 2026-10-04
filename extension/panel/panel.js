@@ -159,6 +159,18 @@ async function refreshCm() {
 async function connectCrowdmark() {
   const base = crowdmarkBase(settings);
   if (!cmAllowed) {
+    // permissions.request() does not work in a Firefox sidebar: it rejects with
+    // "An unexpected error occurred", because the sidebar has no
+    // PopupNotifications to hang the prompt on (bugzilla 1493396). No number of
+    // selects gets past that, so there the asking happens on a page in a tab.
+    if (IS_GECKO) {
+      cmDeniedUntil = 0;
+      cmConnectingUntil = Date.now() + CM_CONNECT_WAIT_MS;
+      renderBar();
+      announce("Finish connecting Crowdmark in the tab that just opened.");
+      chrome.tabs.create({ url: chrome.runtime.getURL("connect/connect.html") });
+      return;
+    }
     // permissions.request only works straight from the click, so nothing is awaited before it.
     const ok = await chrome.permissions.request({ origins: [`${base}/*`] }).catch(() => false);
     if (!ok) {

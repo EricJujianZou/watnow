@@ -1410,6 +1410,10 @@ async function handle(msg, sender) {
       return { ok: true };
     }
     case "crowdmark:connect":
+      // Access was just given, so register the bridge before reading. The connect
+      // page waits on this answer before it leaves for Crowdmark, so the page it
+      // lands on is one the background can read through.
+      await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
       return { ok: true, status: await readCrowdmarkOnly() };
     case "crowdmark:page": {
       // The bridge is on a Crowdmark page, so a read that looked signed out
