@@ -139,7 +139,8 @@ export function rowView(item, course, now) {
 
 /**
  * "checking" while WATnow asks whether an item being checked off was handed
- * in, "blocked" when the answer was no and it stayed open. "missing" is the
+ * in, "blocked" when the answer was no and it stayed open, "unchecked" when
+ * the site couldn't be asked and it stayed open. "missing" is the
  * older warning on an item checked off before the site was asked. A check
  * that never finished (the browser closed mid-ask) stops showing after a minute.
  */

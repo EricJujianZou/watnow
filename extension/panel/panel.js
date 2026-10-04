@@ -252,7 +252,7 @@ function rowHTML(r) {
     ? `<span class="moved">${icon("arrow", 16)}<span>Moved from <span class="was">${esc(r.movedFrom)}</span></span></span>`
     : "";
   return `
-  <li class="row tone-${r.tone} hl-${r.color}${r.movedFrom ? " is-moved" : ""}${r.handIn === "missing" || r.handIn === "blocked" ? " is-unsent" : ""}" data-id="${esc(r.id)}" data-flip="r-${esc(r.id)}">
+  <li class="row tone-${r.tone} hl-${r.color}${r.movedFrom ? " is-moved" : ""}${r.handIn === "missing" || r.handIn === "blocked" || r.handIn === "unchecked" ? " is-unsent" : ""}" data-id="${esc(r.id)}" data-flip="r-${esc(r.id)}">
     <button class="check" data-act="toggle" data-id="${esc(r.id)}" aria-pressed="${done}" ${r.status === "submitted" || r.handIn === "checking" ? 'aria-disabled="true"' : ""} aria-label="${esc(checkLabel)}">
       <span class="check-ring">${icon("check", 14, "check-mark")}</span>
     </button>
@@ -279,9 +279,14 @@ function handInHTML(r) {
   if (r.handIn === "checking") {
     return `<p class="handin is-checking" role="status"><span class="handin-bar" aria-hidden="true"></span><span>Checking ${esc(site)} for your submission</span></p>`;
   }
-  if (r.handIn !== "missing" && r.handIn !== "blocked") return "";
+  if (r.handIn !== "missing" && r.handIn !== "blocked" && r.handIn !== "unchecked") return "";
   const where = r.kind === "crowdmark" ? "Crowdmark" : r.kind === "quiz" ? "quiz" : "dropbox";
-  const why = r.handIn === "blocked" ? `${site} doesn't show a submission for this, so it can't be checked off yet.` : `${site} doesn't show a submission for this yet.`;
+  const why =
+    r.handIn === "unchecked"
+      ? `Couldn't reach ${site} to check your submission, so it isn't checked off. Try again in a moment.`
+      : r.handIn === "blocked"
+        ? `${site} doesn't show a submission for this, so it can't be checked off yet.`
+        : `${site} doesn't show a submission for this yet.`;
   return `<p class="handin is-missing" role="status">${icon("alert", 16)}<span>${esc(why)}</span>
     <button class="handin-open" data-act="open" data-id="${esc(r.id)}">Open ${where}</button></p>`;
 }

@@ -1191,8 +1191,8 @@ async function toggleDone(itemId) {
 /**
  * Asks Learn or Crowdmark whether anything is handed in before a check-off.
  * A yes turns the row into Submitted. A no leaves it open with a note that
- * the site shows no submission. No answer (offline, Learn down) checks it off,
- * since there's nothing to go on.
+ * the site shows no submission. No answer (offline, signed out, slow) leaves it
+ * open too, with a note that the site couldn't be checked.
  */
 async function confirmHandIn(settings, item) {
   const check = await askSubmitted(settings, item).catch(() => null);
@@ -1201,15 +1201,15 @@ async function confirmHandIn(settings, item) {
     if (!it || it.status !== "open" || it.handIn !== "checking") return;
     delete it.handIn;
     delete it.handInAt;
-    if (check && !check.submitted) {
-      it.handIn = "blocked";
+    if (!check || !check.submitted) {
+      it.handIn = check ? "blocked" : "unchecked";
       it.handInAt = nowIso();
       return;
     }
-    it.status = check ? "submitted" : "done";
-    it.completedAt = (check && check.at) || nowIso();
+    it.status = "submitted";
+    it.completedAt = check.at || nowIso();
     st.seq += 1;
-    st.lastEvent = { type: check ? "submitted" : "marked", itemId: it.id, seq: st.seq, at: nowIso() };
+    st.lastEvent = { type: "submitted", itemId: it.id, seq: st.seq, at: nowIso() };
   });
   await refreshBadge();
   await scheduleReminders();
