@@ -1,7 +1,7 @@
 // Public OAuth configuration. Never put a client secret in the extension.
 // Register chrome.identity.getRedirectURL("google") on a Web application client
 // to enable explicit account selection. Existing Chrome clients still connect.
-export const GOOGLE_WEB_CLIENT_ID = "989951960898-0cdlartdvoaq7knko9eg272v89i63td0.apps.googleusercontent.com";
+export const GOOGLE_WEB_CLIENT_ID = "";
 export const CALENDAR_NAME = "WATNOW";
 export const CALENDAR_MARKER = "WATnow managed deadlines v1";
 export const GOOGLE_SCOPES = [

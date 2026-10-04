@@ -14,7 +14,7 @@ import { pingInstall, pingDayActive } from "./core/usage.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
 import { updateCalendarState } from "./core/store.js";
-import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, stopCalendarSync } from "./calendar/calendar-sync.js";
+import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, recoverCalendarSync, stopCalendarSync } from "./calendar/calendar-sync.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -105,9 +105,9 @@ chrome.permissions.onRemoved.addListener(() => syncBridge());
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") pingInstall();
-  setup();
+  setup().then(recoverCalendarSync);
 });
-chrome.runtime.onStartup.addListener(() => setup().then(startupCheck));
+chrome.runtime.onStartup.addListener(() => setup().then(startupCheck).then(recoverCalendarSync));
 
 /**
  * Once per browser session (chrome.storage.session is empty after Chrome

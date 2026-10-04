@@ -55,5 +55,6 @@ export function calendarApi(token, guard = async () => {}) {
     getEvent: (id, eventId) => request(`/calendars/${part(id)}/events/${part(eventId)}`),
     insertEvent: (id, event) => request(`/calendars/${part(id)}/events`, { method: "POST", body: event }),
     patchEvent: (id, eventId, event) => request(`/calendars/${part(id)}/events/${part(eventId)}`, { method: "PATCH", body: event }),
+    deleteEvent: (id, eventId) => request(`/calendars/${part(id)}/events/${part(eventId)}`, { method: "DELETE" }),
   };
 }

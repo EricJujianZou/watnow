@@ -35,6 +35,24 @@ export async function reconcileEvent(api, calendarId, change) {
   return { fingerprint: change.fingerprint };
 }
 
+/** Deletes an event whose item disappeared from state. Checked out the same
+ * way as an update: only a WATnow-tagged event is removed. Already-gone is
+ * treated as success, not an error to retry. */
+export async function removeEvent(api, calendarId, id) {
+  let existing;
+  try {
+    existing = await api.getEvent(calendarId, id);
+  } catch (e) {
+    if (e.status === 404 || e.status === 410) return;
+    throw e;
+  }
+  if (existing.status === "cancelled") return;
+  if (existing.extendedProperties?.private?.watnow !== "1") {
+    throw calendarError("ownership", "An event couldn't be identified as a WATnow deadline. Sync is paused.");
+  }
+  await api.deleteEvent(calendarId, id);
+}
+
 export async function scheduleCalendarRetry(minutes = 1) {
   await chrome.alarms.create(CALENDAR_ALARM, { when: Date.now() + minutes * 60000 });
 }
@@ -51,18 +69,29 @@ export async function requestCalendarSync() {
   runCalendarSync();
 }
 
+/** Safe on every worker wake: a stuck "connecting" means the previous worker
+ * died mid-auth, so the only recovery is to ask the user to reconnect. Pure
+ * storage, no network, since this runs far more often than the browser
+ * actually restarts. */
 export async function resumeCalendarSync() {
   const c = await getCalendarState();
-  if (c.status === "connecting") {
-    await updateCalendarState((s) => {
-      s.generation = crypto.randomUUID();
-      s.enabled = false;
-      s.status = "off";
-      s.error = "Connection was interrupted. Select Connect Google Calendar to try again.";
-    });
-    return;
-  }
-  if (c.enabled && !["reconnect", "error"].includes(c.status)) await requestCalendarSync();
+  if (c.status !== "connecting") return;
+  await updateCalendarState((s) => {
+    s.generation = crypto.randomUUID();
+    s.enabled = false;
+    s.status = "off";
+    s.error = "Connection was interrupted. Select Connect Google Calendar to try again.";
+  });
+}
+
+/** Only call this on a real browser startup or extension install/update, not
+ * on routine worker wake-ups: chrome.alarms persists CALENDAR_ALARM across
+ * those on its own, so a plain restart doesn't need this. This is the
+ * fallback for when that alarm didn't survive (e.g. the first wake after
+ * enabling sync, or an update that cleared alarms). */
+export async function recoverCalendarSync() {
+  const c = await getCalendarState();
+  if (c.enabled && !["connecting", "reconnect", "error"].includes(c.status)) await requestCalendarSync();
 }
 
 /** The old destination is paused before account selection begins. Cancelling
@@ -192,9 +221,15 @@ async function runCalendarSyncNow() {
     for (const change of plan) {
       if (done >= 20 || Date.now() - started > 25000) break;
       await guard();
-      const result = await reconcileEvent(api, calendarId, change);
-      await guard();
-      await save((_s, r) => { r.events[change.id] = result; });
+      if (change.remove) {
+        await removeEvent(api, calendarId, change.id);
+        await guard();
+        await save((_s, r) => { r.events[change.id] = { deleted: true }; });
+      } else {
+        const result = await reconcileEvent(api, calendarId, change);
+        await guard();
+        await save((_s, r) => { r.events[change.id] = { ...result, school: settings.school }; });
+      }
       done++;
     }
     await guard();

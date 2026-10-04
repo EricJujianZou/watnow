@@ -359,8 +359,6 @@ function toolIdFromUrl(kind, url) {
 
 const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 
-const completionDate = (x) => isoOrNull(x.DateCompleted) || isoOrNull(x.CompletionDate) || isoOrNull(x.CompletedDate);
-
 function categoryFor(kind, title, categoryName) {
   if (kind === "dropbox") return /\blab/i.test(categoryName || "") || /^\s*lab\b/i.test(title || "") ? "lab" : "assignment";
   if (kind === "quiz" || kind === "discussion") return kind;
@@ -688,11 +686,11 @@ export class LiveSource {
     return r.json;
   }
 
-  async paged(path, opts) {
+  async paged(path) {
     const out = [];
     let next = path;
     for (let i = 0; i < 25 && next; i++) {
-      const page = await this.api(next, opts);
+      const page = await this.api(next);
       out.push(...listOf(page));
       const info = page && page.PagingInfo;
       if (info && info.HasMoreItems && info.Bookmark) {
@@ -913,7 +911,7 @@ export class LiveSource {
     const { le } = await this.ensureVersions();
     const { from, to } = this.window();
     const doneTo = utcDateTime(new Date(this.now.getTime() + DAY_MS));
-    const feed = { items: [], completed: new Map(), completionRows: [], failed: [], ok: 0, missed: new Set(), activityTypes: {} };
+    const feed = { items: [], completed: new Map(), failed: [], ok: 0, missed: new Set(), activityTypes: {} };
     const range = { startDateTime: from, endDateTime: to };
     // The completions routes filter on the completion date and take different names.
     const doneRange = { completedFromDateTime: from, completedToDateTime: doneTo };
@@ -932,15 +930,13 @@ export class LiveSource {
     }
     for (const x of [...got["completions/due"], ...got.completions]) {
       if (!x || x.OrgUnitId == null || x.ItemId == null) continue;
-      const at = completionDate(x) || this.now.toISOString();
+      const at = isoOrNull(x.DateCompleted) || isoOrNull(x.CompletionDate) || isoOrNull(x.CompletedDate) || this.now.toISOString();
       feed.completed.set(`${x.OrgUnitId}:${x.ItemId}`, at);
-      feed.completionRows.push({ ...x, DateCompleted: at });
     }
     for (const x of [...got["myItems/due"], ...got.myItems]) {
       if (!x || x.OrgUnitId == null || x.ItemId == null) continue;
       feed.activityTypes[String(x.ActivityType)] = (feed.activityTypes[String(x.ActivityType)] || 0) + 1;
       feed.items.push(x);
-      if (completionDate(x)) feed.completionRows.push(x);
     }
     this.report.feed = {
       ok: feed.ok,
@@ -1283,7 +1279,7 @@ export class LiveSource {
           dueField: fieldOf(x.DueDate),
           opensAt: laterOnly(isoOrNull(x.StartDate), dueAt),
           url,
-          completedAt: completionDate(x) || feed.completed.get(`${x.OrgUnitId}:${x.ItemId}`) || null,
+          completedAt: feed.completed.get(`${x.OrgUnitId}:${x.ItemId}`) || null,
         },
         "feed"
       );
@@ -1320,27 +1316,7 @@ export class LiveSource {
     if (cal.ok) okSources.add("calendar");
     this.readOk.set(course.id, okSources);
     rep.readOk = [...okSources];
-    const uniqueItems = [...new Set(byKey.values())];
-    // Completion records can outlive the dated myItems entry, or have no date
-    // of their own. Match them to tool/calendar rows independently of that feed.
-    for (const x of feed.completionRows) {
-      if (Number(x.OrgUnitId) !== ou || x.IsExempt === true) continue;
-      const kind = kindOf(x);
-      const toolId = toolIdFromUrl(kind, absolute(this.base, x.ItemUrl));
-      let item = toolId ? byKey.get(`${ou}:${kind}:${toolId}`) : null;
-      if (!toolId) {
-        if (kind === "content") item = byKey.get(`${ou}:content:${x.ItemId}`);
-        if (!item && norm(x.ItemName)) {
-          const matches = uniqueItems.filter((i) => i.kind === kind && norm(i.title) === norm(x.ItemName));
-          if (matches.length === 1) item = matches[0];
-        }
-      }
-      if (item && item.status !== "submitted") {
-        item.status = "submitted";
-        item.completedAt = completionDate(x);
-      }
-    }
-    const items = dropEchoes(uniqueItems);
+    const items = dropEchoes([...new Set(byKey.values())]);
     for (const i of items) {
       i.seenIn = [...i.seen];
       delete i.srcs;
@@ -1395,15 +1371,16 @@ export class LiveSource {
         const q = new URLSearchParams({ orgUnitIdsCSV: String(ou), completedFromDateTime: from, completedToDateTime: utcDateTime(Date.now() + DAY_MS) });
         const rows = [];
         for (const route of ["completions/due/", "completions/"]) {
-          rows.push(...await this.paged(`/d2l/api/le/${le}/content/myItems/${route}?${q}`, { via }));
+          const page = await this.api(`/d2l/api/le/${le}/content/myItems/${route}?${q}`, { via });
+          rows.push(...listOf(page));
         }
         const hit = rows.find((x) => {
-          if (!x || Number(x.OrgUnitId) !== ou || kindOf(x) !== "quiz" || x.IsExempt === true) return false;
+          if (!x || Number(x.OrgUnitId) !== ou) return false;
           const id = toolIdFromUrl("quiz", absolute(this.base, x.ItemUrl));
           return id ? id === sourceId : norm(x.ItemName) === norm(item.title);
         });
         if (!hit) return { submitted: false };
-        return { submitted: true, at: completionDate(hit) || new Date().toISOString() };
+        return { submitted: true, at: isoOrNull(hit.DateCompleted) || isoOrNull(hit.CompletionDate) || new Date().toISOString() };
       } catch (e) {
         this.report.notes.push(`submission check via ${via} failed (${e.code || "error"})`);
       }
