@@ -5,6 +5,8 @@ import { brandMark, esc } from "../src/ui/icons.js";
 import { fmtAgo } from "../src/core/dates.js";
 import { TESTER_BUILD } from "../src/core/build.js";
 import { IS_GECKO } from "../src/core/env.js";
+import { currentSchool } from "../src/core/schools.js";
+import { CROWDMARK_BASE, CROWDMARK_ORIGIN, probeCrowdmark } from "../src/data/crowdmark-probe.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const page = document.getElementById("page");
@@ -37,17 +39,20 @@ function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
+// The school's own name for its course site, set once settings load.
+let lms = "Learn";
+
 const OUTCOME = {
-  "signed-out": "Learn said nobody was signed in.",
-  "no-tab": "Learn said nobody was signed in, and no Learn tab was open to try instead.",
-  unreachable: "WATnow couldn't reach Learn. The network was down or Learn didn't answer.",
-  "every-course-failed": "Learn answered, but every course failed to read.",
-  error: "The read stopped with an error.",
-  "course-failed": "The read stopped with an error.",
+  "signed-out": () => `${lms} said nobody was signed in.`,
+  "no-tab": () => `${lms} said nobody was signed in, and no ${lms} tab was open to try instead.`,
+  unreachable: () => `WATnow couldn't reach ${lms}. The network was down or ${lms} didn't answer.`,
+  "every-course-failed": () => `${lms} answered, but every course failed to read.`,
+  error: () => "The read stopped with an error.",
+  "course-failed": () => "The read stopped with an error.",
 };
 
 function debugSummary(report) {
-  if (!report) return TESTER_BUILD ? "WATnow hasn't read Learn yet. Open the WATnow side panel while you're signed in to Learn." : "WATnow hasn't read your real Learn account yet. Choose Live from Learn above, then open the side panel.";
+  if (!report) return TESTER_BUILD ? `WATnow hasn't read ${lms} yet. Open the WATnow side panel while you're signed in to ${lms}.` : "WATnow hasn't read your real Learn account yet. Choose Live from Learn above, then open the side panel.";
   const when = report.finishedAt ? fmtAgo(report.finishedAt, new Date()) : "unfinished";
   const failed = report.failedRequests || 0;
   const counts = report.counts;
@@ -55,7 +60,7 @@ function debugSummary(report) {
   if (report.outcome === "ok" && counts) {
     text += `Found ${plural(counts.items, "deadline", "deadlines")} across ${plural(counts.courses, "course", "courses")}. `;
   } else if (report.outcome) {
-    text += `${OUTCOME[report.outcome] || OUTCOME.error} `;
+    text += `${(OUTCOME[report.outcome] || OUTCOME.error)()} `;
   }
   text += `${plural((report.requests || []).length, "request", "requests")}, ${failed} failed.`;
   return text;
@@ -63,6 +68,7 @@ function debugSummary(report) {
 
 async function render() {
   const settings = await getSettings();
+  lms = (currentSchool(settings) || { system: "Learn" }).system;
   applyTheme(settings.theme);
   document.title = "Report a Bug";
   const { liveDebug } = await chrome.storage.local.get("liveDebug");
@@ -146,7 +152,7 @@ async function render() {
     <div class="sheet">
       <section class="set-section" aria-labelledby="dbg-h">
         <h2 id="dbg-h" class="sr-only">Debug report</h2>
-        <p class="set-help">Send a debug report to Eric and he will buy you a coffee. Your Learn info is not in the report (you can check it first by pasting it somewhere and ctrl+f your info).</p>
+        <p class="set-help">Send a debug report to Eric and he will buy you a coffee. Your ${esc(lms)} info is not in the report (you can check it first by pasting it somewhere and ctrl+f your info).</p>
         <p class="set-help" data-debug-summary>${esc(debugSummary(liveDebug))}</p>
         <div class="row-actions" style="margin-top:12px">
           <button class="btn btn-primary btn-sm" data-act="copy-debug" ${liveDebug ? "" : "disabled"}>Copy debug info</button>
@@ -155,6 +161,22 @@ async function render() {
         <textarea class="input" data-debug-text rows="8" readonly hidden style="width:100%;height:auto;padding:8px 12px;margin-top:8px;font-family:ui-monospace,monospace;font-size:12px"></textarea>
       </section>
     </div>
+
+    ${TESTER_BUILD ? "" : `
+    <div class="sheet">
+      <section class="set-section" aria-labelledby="cm-h">
+        <h2 id="cm-h">Crowdmark test read</h2>
+        <p class="set-help">Sign in to Crowdmark in this browser first, then run the test. It reads your Crowdmark courses and assignments once and copies a report. The report has course names, assignment titles and dates. It has no scores and nothing about you.</p>
+        <div class="row-actions" style="margin-top:12px">
+          <button class="btn btn-quiet btn-sm" data-act="cm-open">Open Crowdmark sign-in</button>
+          <button class="btn btn-primary btn-sm" data-act="cm-probe">Run the test read</button>
+          <button class="btn btn-quiet btn-sm" data-act="cm-connect">Connect Crowdmark</button>
+          <button class="btn btn-quiet btn-sm" data-act="cm-disconnect">Disconnect Crowdmark</button>
+        </div>
+        <p class="status-text" data-cm-status role="status"></p>
+        <textarea class="input" data-cm-text rows="8" readonly hidden style="width:100%;height:auto;padding:8px 12px;margin-top:8px;font-family:ui-monospace,monospace;font-size:12px"></textarea>
+      </section>
+    </div>`}
 
     <p class="page-foot">Not affiliated with D2L or the University of Waterloo.</p>`;
 }
@@ -170,6 +192,48 @@ page.addEventListener("click", async (e) => {
     status.textContent = res && res.ok ? "Done." : (res && res.reason !== "debounced" && res.reason) || "";
     setTimeout(() => (status.textContent = ""), 5000);
     return;
+  }
+  if (t.dataset.act === "cm-open") chrome.tabs.create({ url: `${CROWDMARK_BASE}/sign-in/waterloo` });
+  if (t.dataset.act === "cm-connect" || t.dataset.act === "cm-disconnect") {
+    const status = page.querySelector("[data-cm-status]");
+    const on = t.dataset.act === "cm-connect";
+    // chrome.permissions.request only works straight from the click, so nothing is awaited before it.
+    const ok = await (on ? chrome.permissions.request({ origins: [CROWDMARK_ORIGIN] }) : chrome.permissions.remove({ origins: [CROWDMARK_ORIGIN] })).catch(() => false);
+    if (on && !ok) {
+      status.textContent = "Your browser didn't give WATnow access to Crowdmark, so it isn't connected.";
+      return;
+    }
+    chrome.runtime.sendMessage({ type: "panel:refresh" }).catch(() => {});
+    status.textContent = on ? "Crowdmark is connected. Open the panel to see its deadlines with your Learn ones." : "Crowdmark is disconnected. Its deadlines leave the panel on the next check.";
+    return;
+  }
+  if (t.dataset.act === "cm-probe") {
+    const status = page.querySelector("[data-cm-status]");
+    const box = page.querySelector("[data-cm-text]");
+    // The permission prompt only shows from inside the click, so this comes before any other await.
+    const granted = await chrome.permissions.request({ origins: [CROWDMARK_ORIGIN] }).catch(() => false);
+    if (!granted) {
+      status.textContent = "Your browser didn't give WATnow access to Crowdmark, so nothing was read.";
+      return;
+    }
+    t.disabled = true;
+    status.textContent = "Reading Crowdmark. This takes up to a minute.";
+    const fromPage = await probeCrowdmark("page");
+    const res = await chrome.runtime.sendMessage({ type: "crowdmark:probe" }).catch((err) => ({ ok: false, reason: String(err) }));
+    t.disabled = false;
+    const text = JSON.stringify({ version: chrome.runtime.getManifest().version, page: fromPage, worker: res && res.ok ? res.report : res }, null, 2);
+    box.hidden = false;
+    box.value = text;
+    const n = fromPage.courseList.length;
+    const found = n ? `Found ${plural(n, "course", "courses")} on Crowdmark.` : "Crowdmark didn't return any courses. The report says why.";
+    try {
+      await navigator.clipboard.writeText(text);
+      status.textContent = `${found} The report is copied, so paste it to Claude.`;
+    } catch {
+      box.focus();
+      box.select();
+      status.textContent = `${found} Copying didn't work. The report is selected below, so press Ctrl+C to copy it.`;
+    }
   }
   // Gecko has no openable shortcuts URL, so that button is not rendered there.
   if (t.dataset.act === "shortcuts" && !IS_GECKO) chrome.tabs.create({ url: "chrome://extensions/shortcuts" });

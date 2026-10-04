@@ -47,7 +47,7 @@ export function verdict(items, courses, now) {
   const w = week.length;
   let line1;
   let sleepy = false;
-  if (!open.length) line1 = "Everything on Learn is handed in.";
+  if (!open.length) line1 = "Everything is handed in.";
   else if (t) line1 = `You have ${plural(t, "deadline", "deadlines")} due today.`;
   else {
     line1 = "Nothing due today";
@@ -119,7 +119,7 @@ export function rowView(item, course, now) {
     courseId: item.courseId,
     code: course ? course.code : "",
     color: course ? course.color : "mint",
-    type: CATEGORY_LABEL[item.category] || "Item",
+    type: `${CATEGORY_LABEL[item.category] || "Item"}${item.kind === "crowdmark" ? " · Crowdmark" : ""}`,
     category: item.category,
     title: item.title,
     top,
@@ -132,7 +132,20 @@ export function rowView(item, course, now) {
     status: item.status,
     movedFrom: item.moved ? movedLabel(item.moved.from, due) : null,
     url: item.url,
+    kind: item.kind,
+    handIn: handInView(item, now),
   };
+}
+
+/**
+ * "checking" while WATnow asks whether a checked-off item was handed in,
+ * "missing" when the answer was no. A check that never finished (the browser
+ * closed mid-ask) stops showing after a minute.
+ */
+function handInView(item, now) {
+  if (item.status !== "done" || !item.handIn) return null;
+  if (item.handIn === "checking" && now - Date.parse(item.handInAt) > 60 * 1000) return null;
+  return item.handIn;
 }
 
 export function buildModel(state, now, filter = "all") {

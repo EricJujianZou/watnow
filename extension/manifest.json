@@ -3,7 +3,7 @@
   "name": "__MSG_appName__",
   "short_name": "__MSG_appName__",
   "description": "__MSG_appDescription__",
-  "version": "1.0.5",
+  "version": "1.2.0",
   "default_locale": "en",
   "minimum_chrome_version": "116",
   "browser_specific_settings": {
@@ -50,10 +50,21 @@
     "sidePanel",
     "storage",
     "notifications",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "https://learn.uwaterloo.ca/*"
+  ],
+  "optional_host_permissions": [
+    "https://courselink.uoguelph.ca/*",
+    "https://mylearningspace.wlu.ca/*",
+    "https://avenue.cllmcmaster.ca/*",
+    "https://onq.queensu.ca/*",
+    "https://westernu.brightspace.com/*",
+    "https://courses.torontomu.ca/*",
+    "https://courses.ryerson.ca/*",
+    "https://app.crowdmark.com/*"
   ],
   "content_scripts": [
     {

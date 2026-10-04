@@ -2,15 +2,18 @@
 // keeps state, sets the toolbar badge, sends notifications and runs the demo
 // shortcuts.
 
-import { getState, setState, getSettings, getCatalog, setCatalog, emptyState, DEFAULT_SETTINGS } from "./core/store.js";
+import { getState, setState, getSettings, setSettings, getCatalog, setCatalog, emptyState, DEFAULT_SETTINGS } from "./core/store.js";
 import { buildCatalog, learnUrl } from "./data/demo-source.js";
 import { createSource } from "./data/source.js";
 import { liveBase, assignColors } from "./data/live-source.js";
+import { currentSchool, schoolOrigins, schoolPatterns, homeUrl, systemName, DEFAULT_SCHOOL } from "./core/schools.js";
 import { DEMO_SCRIPT } from "./data/fixtures.js";
 import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
-import { plannedReminders, reminderCopy, movedCopy } from "./core/reminders.js";
+import { plannedReminders, reminderCopy, movedCopy, unsubmittedCopy, canConfirm } from "./core/reminders.js";
 import { pingInstall, pingDayActive } from "./core/usage.js";
 import { IS_GECKO, HAS_SIDE_PANEL, HAS_SIDEBAR } from "./core/env.js";
+import { probeCrowdmark } from "./data/crowdmark-probe.js";
+import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -39,6 +42,8 @@ const nowIso = () => new Date().toISOString();
 /* ------------------------------------------------------------------ */
 
 async function setup() {
+  await migrateSchool();
+  await syncBridge().catch((e) => console.warn("bridge", e));
   // Chrome: clicking the toolbar icon opens the side panel. Gecko has no
   // sidePanel API, so there the action click toggles the sidebar (see below).
   if (HAS_SIDE_PANEL) {
@@ -72,6 +77,47 @@ if (!HAS_SIDE_PANEL && HAS_SIDEBAR) {
     }
   });
 }
+
+/** Every origin the LIVE site loads from: the school's, its aliases, and the test mock when one stands in. */
+function liveOrigins(settings) {
+  return [...new Set([liveBase(settings), ...schoolOrigins(currentSchool(settings))])];
+}
+
+/**
+ * Installs from before the school picker read Waterloo Learn. One that has read
+ * Learn before keeps doing so without being asked to pick.
+ */
+async function migrateSchool() {
+  const settings = await getSettings();
+  if (settings.mode !== "live" || settings.school) return;
+  const s = await getState();
+  if (s.lastSyncAt) await setSettings({ school: DEFAULT_SCHOOL });
+}
+
+const BRIDGE_ID = "school-bridge";
+
+/**
+ * The manifest runs the bridge on Waterloo Learn only. Another school's pages
+ * get it registered here, once the student has granted access to that site.
+ */
+async function syncBridge() {
+  if (!chrome.scripting) return;
+  const settings = await getSettings();
+  const school = settings.mode === "live" ? currentSchool(settings) : null;
+  const patterns = school && school.id !== DEFAULT_SCHOOL ? schoolPatterns(school) : [];
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [BRIDGE_ID] });
+  } catch {
+    /* not registered */
+  }
+  if (!patterns.length) return;
+  const granted = await chrome.permissions.contains({ origins: patterns }).catch(() => false);
+  if (!granted) return;
+  await chrome.scripting.registerContentScripts([{ id: BRIDGE_ID, matches: patterns, js: ["src/content/learn-bridge.js"], runAt: "document_start", persistAcrossSessions: true }]);
+}
+
+chrome.permissions.onAdded.addListener(() => syncBridge());
+chrome.permissions.onRemoved.addListener(() => syncBridge());
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") pingInstall();
@@ -134,6 +180,18 @@ async function runScan() {
   const epoch = modeEpoch;
   try {
     const settings = await getSettings();
+    // No school picked yet: the panel shows the school picker instead of reading.
+    if (settings.mode === "live" && !currentSchool(settings)) return;
+    // Access to the school's site was taken back in Chrome's settings: pick again,
+    // which asks for it again, instead of reading and failing as if offline.
+    const school = settings.mode === "live" ? currentSchool(settings) : null;
+    if (school && school.id !== DEFAULT_SCHOOL && !settings.liveBaseOverride) {
+      const granted = await chrome.permissions.contains({ origins: [`${school.origin}/*`] }).catch(() => true);
+      if (!granted) {
+        await setSettings({ school: null });
+        return;
+      }
+    }
     if (settings.mode === "live") {
       await runLiveScan(settings, epoch);
       return;
@@ -239,8 +297,11 @@ async function syncLiveAlarm() {
 /** Runs one GET through an open Learn tab's content script (learn-bridge.js). */
 async function relayFetch(base, path) {
   let tabs = [];
+  const settings = await getSettings();
+  const school = settings.mode === "live" ? currentSchool(settings) : null;
+  const patterns = school && school.origin === base ? schoolPatterns(school) : [`${base}/*`];
   try {
-    tabs = await chrome.tabs.query({ url: `${base}/*` });
+    tabs = await chrome.tabs.query({ url: patterns });
   } catch {
     return { noTab: true };
   }
@@ -260,6 +321,9 @@ async function relayFetch(base, path) {
 async function saveLiveReport(source, extra) {
   try {
     const report = source.finishReport({ version: chrome.runtime.getManifest().version, ...extra });
+    // Link fallbacks come from clicks, not reads, so they carry over from the last report.
+    const { liveDebug: last } = await chrome.storage.local.get("liveDebug");
+    if (last && last.linkFallbacks) report.linkFallbacks = last.linkFallbacks;
     await chrome.storage.local.set({ liveDebug: report });
   } catch (e) {
     console.warn("live report", e);
@@ -277,7 +341,42 @@ function abortError() {
  * fresh items and listed in `failed`, so its stored items are kept. A unit with
  * no term that fails to read stays too when WATnow already had items from it.
  */
-async function readLive(source, epoch, { onCourses, onProgress, prevItems = [] } = {}) {
+/**
+ * Adds Crowdmark to a Learn read, when the student connected it. Crowdmark
+ * items go under the Learn course with the same code, or under a course of
+ * their own. "crowdmark" is added to readOk for every course Crowdmark read
+ * completely, which is what lets mergeLive drop an item that is gone. When
+ * Crowdmark is signed out or unreachable nothing is added, so stored Crowdmark
+ * items and courses stay. When it is not connected, every course counts as
+ * read, so stored Crowdmark items go away.
+ */
+/** The scan list row that stands for the Crowdmark read. Not a course id. */
+const CROWDMARK_ROW = "crowdmark";
+
+/** Keeps `since` at the moment the status last changed, so a signed-out spell can be measured. */
+function crowdmarkState(prev, status) {
+  const at = nowIso();
+  const since = prev && prev.status === status && prev.since ? prev.since : at;
+  const okAt = status === "ok" ? at : prev && prev.okAt;
+  return { status, at, since, okAt };
+}
+
+async function addCrowdmark(settings, learnCourses, readOk, prevCourses, allowed) {
+  const markOk = (id) => readOk.set(id, new Set([...(readOk.get(id) || []), "crowdmark"]));
+  const before = (prevCourses || []).filter((c) => c.crowdmark);
+  if (!allowed) {
+    for (const c of learnCourses) markOk(c.id);
+    return { status: "off", courses: [], items: [], report: null };
+  }
+  const cm = await readCrowdmark(settings, learnCourses);
+  if (cm.status !== "ok") return { status: cm.status, courses: before, items: [], report: cm.report };
+  const had = new Set(before.map((c) => c.id));
+  const courses = cm.courses.filter((c) => !c.readFailed || had.has(c.id)).map(({ readFailed, ...c }) => c);
+  for (const c of [...learnCourses, ...courses]) if (!cm.failedCourseIds.has(c.id)) markOk(c.id);
+  return { status: "ok", courses, items: cm.items, report: cm.report };
+}
+
+async function readLive(source, epoch, { onCourses, onProgress, onCrowdmark, prevItems = [], prevCourses = [] } = {}) {
   const session = await source.checkSession();
   if (!session.signedIn) return { session };
   if (epoch !== modeEpoch) throw abortError();
@@ -288,6 +387,11 @@ async function readLive(source, epoch, { onCourses, onProgress, prevItems = [] }
   const courses = all.filter((c) => c.current !== false);
   const extras = all.filter((c) => c.current === false);
   if (onCourses) await onCourses(courses);
+  // Crowdmark gets a row of its own under the courses. It is marked reading
+  // as soon as the course rows finish, so the termless units read after them
+  // and the Crowdmark read itself do not look like a stall.
+  const cmOn = await crowdmarkAllowed(source.settings);
+  if (cmOn && onCrowdmark) await onCrowdmark("waiting", 0);
   const items = [];
   const failed = new Set();
   for (let i = 0; i < courses.length; i++) {
@@ -304,6 +408,7 @@ async function readLive(source, epoch, { onCourses, onProgress, prevItems = [] }
       if (onProgress) await onProgress(i, "error", 0);
     }
   }
+  if (cmOn && onCrowdmark) await onCrowdmark("reading", 0);
   const keptExtras = [];
   const hadItems = new Set(prevItems.map((i) => i.courseId));
   for (const c of extras) {
@@ -323,14 +428,20 @@ async function readLive(source, epoch, { onCourses, onProgress, prevItems = [] }
     }
   }
   if (epoch !== modeEpoch) throw abortError();
-  const kept = assignColors([...courses, ...keptExtras]);
+  const readOk = source.readOk || new Map();
+  const crowdmark = await addCrowdmark(source.settings, [...courses, ...keptExtras], readOk, prevCourses, cmOn);
+  if (epoch !== modeEpoch) throw abortError();
+  if (cmOn && onCrowdmark) await onCrowdmark(crowdmark.status === "ok" ? "done" : "error", crowdmark.items.length);
+  items.push(...crowdmark.items);
+  const kept = assignColors([...courses, ...keptExtras, ...crowdmark.courses]);
   const ids = new Set(kept.map((c) => c.id));
   return {
     session,
     courses: kept,
     items: items.filter((i) => ids.has(i.courseId)),
     failed,
-    readOk: source.readOk || new Map(),
+    readOk,
+    crowdmark: { status: crowdmark.status, report: crowdmark.report },
     allFailed: courses.length > 0 && courses.every((c) => failed.has(c.id)),
   };
 }
@@ -354,6 +465,10 @@ function mergeLive(prevItems, fresh, { failed, readOk, courseIds }, now = new Da
     if (p.status === "done" && f.status === "open") {
       item.status = "done";
       item.completedAt = p.completedAt;
+      if (p.handIn) {
+        item.handIn = p.handIn;
+        item.handInAt = p.handInAt;
+      }
     }
     if (Date.parse(p.dueAt) !== Date.parse(f.dueAt)) {
       const fieldChanged = p.dueField && f.dueField && p.dueField !== f.dueField;
@@ -462,6 +577,7 @@ async function runLiveScan(settings, epoch) {
   try {
     const result = await readLive(source, epoch, {
       prevItems: carry.items,
+      prevCourses: carry.courses,
       onCourses: (courses) =>
         mutate((s) => {
           if (epoch !== modeEpoch) return;
@@ -472,6 +588,14 @@ async function runLiveScan(settings, epoch) {
         mutate((s) => {
           if (epoch !== modeEpoch || !s.scan.courses[i]) return;
           s.scan.courses[i] = { ...s.scan.courses[i], status, found };
+        }),
+      onCrowdmark: (status, found) =>
+        mutate((s) => {
+          if (epoch !== modeEpoch) return;
+          const row = { courseId: CROWDMARK_ROW, status, found };
+          const i = s.scan.courses.findIndex((p) => p.courseId === CROWDMARK_ROW);
+          if (i < 0) s.scan.courses.push(row);
+          else s.scan.courses[i] = row;
         }),
     });
     if (epoch !== modeEpoch) return;
@@ -489,14 +613,16 @@ async function runLiveScan(settings, epoch) {
     const { items, moved } = mergeLive(carry.items, result.items, { failed: result.failed, readOk: result.readOk, courseIds: ids });
     extra.outcome = "ok";
     extra.counts = { courses: result.courses.length, items: items.length, failedCourses: result.failed.size, moved: moved.length };
+    extra.crowdmark = result.crowdmark;
     await wait(240);
     if (epoch !== modeEpoch) return;
     const latest = await getSettings();
     const next = await mutate((s) => {
       s.courses = result.courses;
       s.student = result.session.student || null;
-      s.scan.courses = s.scan.courses.filter((p) => ids.has(p.courseId));
+      s.scan.courses = s.scan.courses.filter((p) => ids.has(p.courseId) || p.courseId === CROWDMARK_ROW);
       s.items = items;
+      s.crowdmark = crowdmarkState(s.crowdmark, result.crowdmark.status);
       delete s.carry;
       if (firstRead) skipPastReminders(s, latest);
       s.stale = null;
@@ -540,6 +666,48 @@ function markStale(s, kind, error, fromPanel) {
   }
 }
 
+let cmReading = false;
+
+/**
+ * Reads Crowdmark alone, without re-reading Learn, so connecting and signing
+ * in show up in seconds. Learn items are kept as they are: only the
+ * "crowdmark" source is marked read, so mergeLive drops nothing else.
+ */
+async function readCrowdmarkOnly() {
+  const settings = await getSettings();
+  const s0 = await getState();
+  if (cmReading || settings.mode !== "live" || s0.scan.status !== "done") return (s0.crowdmark && s0.crowdmark.status) || "off";
+  if (!(await crowdmarkAllowed(settings))) return "off";
+  cmReading = true;
+  try {
+    const readOk = new Map();
+    const cm = await addCrowdmark(settings, s0.courses.filter((c) => !c.crowdmark), readOk, s0.courses, true);
+    await mutate((s) => {
+      s.crowdmark = crowdmarkState(s.crowdmark, cm.status);
+      if (cm.status !== "ok") return;
+      const courses = assignColors([...s.courses.filter((c) => !c.crowdmark), ...cm.courses]);
+      s.items = mergeLive(s.items, cm.items, { failed: new Set(), readOk, courseIds: new Set(courses.map((c) => c.id)) }).items;
+      s.courses = courses;
+    });
+    return cm.status;
+  } finally {
+    cmReading = false;
+  }
+}
+
+// Signing in to Crowdmark ends on a Crowdmark page that isn't a sign-in page.
+// When that loads and Crowdmark isn't reading yet, read it right away instead
+// of waiting for the next 30 minute check.
+chrome.tabs.onUpdated.addListener(async (_id, info, tab) => {
+  if (info.status !== "complete" || !tab.url) return;
+  const settings = await getSettings();
+  const base = crowdmarkBase(settings);
+  if (!tab.url.startsWith(base) || /\/(sign-in|sign_in|login|saml|auth)/i.test(new URL(tab.url).pathname)) return;
+  const st = await getState();
+  if (st.crowdmark && st.crowdmark.status === "ok") return;
+  readCrowdmarkOnly();
+});
+
 /** The 30 minute check, the refresh button, and retries after Learn was unreachable. */
 async function runLiveSync({ fromPanel = false } = {}) {
   if (scanning || liveSyncing) return;
@@ -555,7 +723,7 @@ async function runLiveSync({ fromPanel = false } = {}) {
     s.syncing = true;
   });
   try {
-    const result = await readLive(source, epoch, { prevItems: s0.items });
+    const result = await readLive(source, epoch, { prevItems: s0.items, prevCourses: s0.courses });
     if (epoch !== modeEpoch) return;
     if (!result.session.signedIn) {
       extra.outcome = result.session.reason;
@@ -575,6 +743,7 @@ async function runLiveSync({ fromPanel = false } = {}) {
       s.courses = result.courses;
       s.student = result.session.student || s.student || null;
       s.items = merged.items;
+      s.crowdmark = crowdmarkState(s.crowdmark, result.crowdmark.status);
       s.syncing = false;
       s.error = null;
       s.errorKind = null;
@@ -588,6 +757,7 @@ async function runLiveSync({ fromPanel = false } = {}) {
     });
     extra.outcome = "ok";
     extra.counts = { courses: result.courses.length, items: next.items.length, failedCourses: result.failed.size, moved: moved.length };
+    extra.crowdmark = result.crowdmark;
     await notifyMoved(moved, next);
   } catch (e) {
     if (e.code === "aborted" || epoch !== modeEpoch) return;
@@ -672,6 +842,71 @@ chrome.notifications.onClicked.addListener(async (id) => {
   if (itemId) await openItem(itemId);
 });
 
+// How long a click waits on the link check before opening the first link anyway.
+const LINK_CHECK_MS = 1500;
+const ERROR_PAGE = /\/d2l\/(?:error|common\/errorpages?)\b/i;
+// Only a title that starts with the error, so an item called "Error Analysis Lab" still opens.
+const ERROR_TITLE = /<title>\s*(?:not authori[sz]ed|not found|page not available|error)\b/i;
+
+/**
+ * Asks the school's site whether a link opens a real page before sending the
+ * student there. Item links are built from Brightspace's usual page paths, and
+ * a school running a different version or tool can answer those with an error
+ * page. "bad" is a clear error, "ok" a page, "unknown" anything that can't be
+ * judged (signed out, offline, slow), which opens the link as it is.
+ */
+async function checkLink(url) {
+  let res;
+  try {
+    res = await fetch(url, { credentials: "include", redirect: "follow", signal: AbortSignal.timeout(LINK_CHECK_MS) });
+  } catch {
+    return { verdict: "unknown", status: 0 };
+  }
+  const status = res.status;
+  const final = String(res.url || url);
+  // Sent to a login: the school's sign-in decides where they land after.
+  if (/\/d2l\/login/i.test(final) || new URL(final).origin !== new URL(url).origin) return { verdict: "unknown", status };
+  if (status === 403 || status === 404 || status === 410 || status >= 500 || ERROR_PAGE.test(new URL(final).pathname)) return { verdict: "bad", status };
+  if (!res.ok) return { verdict: "unknown", status };
+  if ((res.headers.get("content-type") || "").includes("html")) {
+    try {
+      const head = (await res.text()).slice(0, 8000);
+      if (ERROR_TITLE.test(head)) return { verdict: "bad", status };
+    } catch {
+      /* body cut off: judge by status alone */
+    }
+  }
+  return { verdict: "ok", status };
+}
+
+/**
+ * The first link that opens: the item, then its course's list for that kind of
+ * item, then the course home, then the site home. The last one is never checked.
+ * Every fallback taken is kept for the debug report, as a path with the ids
+ * swapped out, so reports show which of a school's page paths don't work.
+ */
+async function firstWorkingLink(candidates, kind) {
+  const links = [...new Set(candidates.filter(Boolean))];
+  const misses = [];
+  let chosen = links[links.length - 1];
+  for (let i = 0; i < links.length - 1; i++) {
+    const { verdict, status } = await checkLink(links[i]);
+    if (verdict !== "bad") {
+      chosen = links[i];
+      break;
+    }
+    misses.push({ kind, path: new URL(links[i]).pathname.replace(/\d+/g, "{n}"), status });
+  }
+  if (misses.length) {
+    const { liveDebug } = await chrome.storage.local.get("liveDebug");
+    if (liveDebug) {
+      liveDebug.linkFallbacks = [...(liveDebug.linkFallbacks || []), ...misses].slice(-10);
+      await chrome.storage.local.set({ liveDebug });
+    }
+  }
+  return chosen;
+}
+
 async function openItem(itemId) {
   const s = await getState();
   const item = s.items.find((i) => i.id === itemId);
@@ -680,9 +915,15 @@ async function openItem(itemId) {
   // Learn answers "Not Authorized" for an item that has not opened yet, so send
   // those to the course's list page, where it shows with the date it unlocks.
   const locked = item.opensAt && Date.parse(item.opensAt) > Date.now();
-  const url = (locked && item.listUrl) || item.url;
+  let url = (locked && item.listUrl) || item.url;
+  if (settings.mode === "live") {
+    const course = s.courses.find((c) => c.id === item.courseId);
+    const school = currentSchool(settings);
+    url = await firstWorkingLink([url, item.listUrl, course && course.homeUrl, school && homeUrl(school)], item.kind);
+  }
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  const home = [settings.learnBase, "https://learn.uwaterloo.ca"];
+  // A Crowdmark item reuses the tab only when it is already on Crowdmark, so a Learn tab is never taken over.
+  const home = item.kind === "crowdmark" ? [crowdmarkBase(settings)] : (settings.mode === "live" ? liveOrigins(settings) : [settings.learnBase]);
   const isLearn = tab && tab.url && home.some((h) => h && tab.url.startsWith(h));
   if (tab && isLearn) await chrome.tabs.update(tab.id, { url });
   else await chrome.tabs.create({ url });
@@ -724,6 +965,15 @@ async function submissionCheck(settings, item) {
   }
 }
 
+/** Asks Learn or Crowdmark, whichever the item lives on. */
+function askSubmitted(settings, item) {
+  return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item) : submissionCheck(settings, item);
+}
+
+function siteName(settings, item) {
+  return item.kind === "crowdmark" ? "Crowdmark" : systemName(settings);
+}
+
 let reminderRun = Promise.resolve();
 function sendDueReminders() {
   reminderRun = reminderRun.then(sendDueRemindersNow).catch((e) => console.error(e));
@@ -747,28 +997,46 @@ async function sendDueRemindersNow() {
     for (const p of plan) st.sent[p.key] = nowIso();
   });
   const handedIn = [];
+  const missing = [];
   for (const p of due) {
     const item = s.items.find((i) => i.id === p.itemId);
     const course = item && s.courses.find((c) => c.id === item.courseId);
     if (!item || !course || new Date(item.dueAt) <= new Date()) continue;
     // The reminder says "you haven't submitted", so ask Learn first. If Learn
     // can't be asked, the reminder still goes out.
-    if (settings.mode === "live" && (item.kind === "dropbox" || item.kind === "quiz")) {
-      const check = await submissionCheck(settings, item);
+    if (settings.mode === "live" && canConfirm(item)) {
+      const check = await askSubmitted(settings, item);
       if (check && check.submitted) {
         handedIn.push({ id: item.id, at: check.at });
+        continue;
+      }
+      // A checked-off item only gets a reminder when the site says for sure
+      // that nothing is handed in.
+      if (item.status === "done") {
+        if (!check) continue;
+        missing.push(item.id);
+        await notify("reminder", item.id, unsubmittedCopy(item, course, siteName(settings, item), new Date()));
         continue;
       }
     }
     await notify("reminder", item.id, reminderCopy(item, course, new Date()));
   }
-  if (handedIn.length) {
+  if (handedIn.length || missing.length) {
     await mutate((st) => {
+      for (const id of missing) {
+        const item = st.items.find((i) => i.id === id);
+        if (item && item.status === "done") {
+          item.handIn = "missing";
+          item.handInAt = nowIso();
+        }
+      }
       for (const h of handedIn) {
         const item = st.items.find((i) => i.id === h.id);
         if (!item || item.status === "submitted") continue;
         item.status = "submitted";
         item.completedAt = h.at || nowIso();
+        delete item.handIn;
+        delete item.handInAt;
         st.seq += 1;
         st.lastEvent = { type: "submitted", itemId: item.id, seq: st.seq, at: nowIso() };
       }
@@ -915,17 +1183,57 @@ async function learnSubmitted({ orgUnitId, itemId }) {
 }
 
 async function toggleDone(itemId) {
+  const settings = await getSettings();
+  let ask = null;
   await mutate((st) => {
     const item = st.items.find((i) => i.id === itemId);
     if (!item || item.status === "submitted") return;
     item.status = item.status === "done" ? "open" : "done";
     item.completedAt = item.status === "done" ? nowIso() : null;
+    delete item.handIn;
+    delete item.handInAt;
+    // People check things off right after clicking submit, and sometimes the
+    // file never went in. Ask the site while they're still looking.
+    if (item.status === "done" && settings.mode === "live" && canConfirm(item)) {
+      item.handIn = "checking";
+      item.handInAt = nowIso();
+      ask = { ...item };
+    }
     st.seq += 1;
     st.lastEvent = { type: item.status === "done" ? "marked" : "unmarked", itemId, seq: st.seq, at: nowIso() };
   });
   await refreshBadge();
   await scheduleReminders();
+  if (ask) confirmHandIn(settings, ask);
   return { ok: true };
+}
+
+/**
+ * Right after a check-off, asks Learn or Crowdmark whether anything is handed
+ * in. A yes turns the row into Submitted. A no leaves it checked off with a
+ * warning. No answer drops the "checking" line and shows nothing.
+ */
+async function confirmHandIn(settings, item) {
+  const check = await askSubmitted(settings, item).catch(() => null);
+  await mutate((st) => {
+    const it = st.items.find((i) => i.id === item.id);
+    if (!it || it.status !== "done" || it.handIn !== "checking") return;
+    if (check && check.submitted) {
+      it.status = "submitted";
+      it.completedAt = check.at || nowIso();
+      delete it.handIn;
+      delete it.handInAt;
+      st.seq += 1;
+      st.lastEvent = { type: "submitted", itemId: it.id, seq: st.seq, at: nowIso() };
+    } else if (check) {
+      it.handIn = "missing";
+      it.handInAt = nowIso();
+    } else {
+      delete it.handIn;
+      delete it.handInAt;
+    }
+  });
+  await refreshBadge();
 }
 
 /* ------------------------------------------------------------------ */
@@ -968,6 +1276,16 @@ async function handle(msg, sender) {
       else if (s.scan.status === "running" && !scanning) runScan();
       return { ok: true };
     }
+    case "school:open": {
+      // The panel just saved a school. Register the bridge for its site before the
+      // tab opens, so the first page that loads there can wake a stuck panel.
+      const settings = await getSettings();
+      const school = currentSchool(settings);
+      if (!school) return { ok: false };
+      await syncBridge().catch((e) => console.warn("bridge", e));
+      await chrome.tabs.create({ url: homeUrl(school) });
+      return { ok: true };
+    }
     case "panel:rescan":
       runScan();
       return { ok: true };
@@ -1002,13 +1320,18 @@ async function handle(msg, sender) {
     case "live:learn-page": {
       // A Learn page loaded. If the panel is showing the signed-out state, try again.
       const settings = await getSettings();
-      const base = liveBase(settings);
-      if (settings.mode !== "live" || msg.login || !sender || !String(sender.url || "").startsWith(`${base}/`)) return { ok: true };
+      const origins = liveOrigins(settings);
+      const from = String((sender && sender.url) || "");
+      if (settings.mode !== "live" || msg.login || !origins.some((o) => from.startsWith(`${o}/`))) return { ok: true };
       const s = await getState();
       if (s.scan.status === "error" && !scanning) runScan();
       else if (s.scan.status === "done" && s.stale && Date.now() - Date.parse(s.stale.at) > 20000) runLiveSync();
       return { ok: true };
     }
+    case "crowdmark:connect":
+      return { ok: true, status: await readCrowdmarkOnly() };
+    case "crowdmark:probe":
+      return { ok: true, report: await probeCrowdmark("worker") };
     case "settings:changed":
       await scheduleReminders();
       return { ok: true };
@@ -1027,12 +1350,14 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes.settings) {
     const before = changes.settings.oldValue;
     const after = changes.settings.newValue;
-    if (after && before && before.mode !== after.mode) {
+    // A new school (or a new mode) starts over: the saved list belongs to the old site.
+    if (after && before && (before.mode !== after.mode || (before.school || null) !== (after.school || null))) {
       modeEpoch++;
       await chrome.alarms.clear("reminder");
       await mutate(() => emptyState());
       await syncLiveAlarm();
       await refreshBadge();
+      await syncBridge().catch((e) => console.warn("bridge", e));
     }
     if (after && before && before.learnBase !== after.learnBase) {
       const cat = await getCatalog();
