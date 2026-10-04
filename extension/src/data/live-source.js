@@ -89,16 +89,6 @@
      GET /d2l/api/le/{le}/{orgUnitId}/discussions/forums/{forumId}/topics/
        DueDate, then UnlockEndDate, then the older EndDate. UnlockStartDate is opensAt.
 
-  7. Grades, for Content items (Möbius and other outside tools, or plain topics)
-     GET /d2l/api/le/{le}/{orgUnitId}/grades/values/myGradeValues/
-       [{ GradeObjectIdentifier, GradeObjectName, PointsNumerator, ... }], the student's released grades.
-       A grade item named exactly like the topic matches it directly.
-     GET /d2l/api/le/{le}/{orgUnitId}/content/topics/{topicId}
-       GradeItemId links a topic to its grade item. A grade above zero means
-       submitted; Möbius sends it back as soon as the student submits. The
-       completions feed is not used for Content: opening an LTI link or a PDF
-       counts as "completed" there.
-
   Items are keyed `${orgUnitId}:${kind}:${sourceId}`. The myItems feed and the
   course tools often describe the same item, so the tool id is read from
   ItemUrl (db=, qi=, topics/) when possible, and items with the same course,
@@ -1361,7 +1351,7 @@ export class LiveSource {
           opensAt: laterOnly(isoOrNull(x.StartDate), dueAt),
           url,
           // Content "completed" only means opened (a PDF, or a Möbius link), so
-          // it never counts as handed in. Grades decide those, below.
+          // it never counts as handed in.
           completedAt: kind === "content" ? null : feed.completed.get(`${x.OrgUnitId}:${x.ItemId}`) || null,
         },
         "feed"
@@ -1400,7 +1390,6 @@ export class LiveSource {
     this.readOk.set(course.id, okSources);
     rep.readOk = [...okSources];
     const items = dropEchoes([...new Set(byKey.values())]);
-    await this.markGraded(ou, le, items, rep);
     for (const i of items) {
       i.seenIn = [...i.seen];
       delete i.srcs;
@@ -1411,51 +1400,6 @@ export class LiveSource {
     rep.items = items.length;
     rep.submitted = items.filter((i) => i.status === "submitted").length;
     return items;
-  }
-
-  /**
-   * Content items have no submission of their own (they link to Möbius or a
-   * PDF), but many carry a grade item that the outside tool fills in when the
-   * student submits. A grade above zero marks the item submitted. A zero can be
-   * a prof's "missing", so it doesn't count, and no grade proves nothing.
-   */
-  async markGraded(ou, le, items, rep) {
-    const open = items.filter((i) => i.kind === "content" && i.status === "open" && NUMERIC_ID.test(i.id.split(":").slice(2).join(":")));
-    if (!open.length) return;
-    let values;
-    try {
-      values = listOf(await this.api(`/d2l/api/le/${le}/${ou}/grades/values/myGradeValues/`));
-    } catch (e) {
-      if (e.code === "signed-out") throw e;
-      rep.graded = `failed: ${e.code || "error"}`;
-      return;
-    }
-    // Category rows are section totals, never one assignment.
-    const scoredValues = values.filter((v) => v && Number(v.PointsNumerator) > 0 && !/category/i.test(String(v.GradeObjectTypeName || "")));
-    const byId = new Map(scoredValues.map((v) => [String(v.GradeObjectIdentifier), v]));
-    const byName = new Map(scoredValues.map((v) => [norm(v.GradeObjectName), v]).filter(([k]) => k));
-    let graded = 0;
-    for (const item of open) {
-      if (!byId.size) break;
-      // A grade item named exactly like the topic is the same assignment. Otherwise
-      // the topic names its grade item (hidden topics answer 404 and stay open).
-      let hit = byName.get(norm(item.title));
-      if (!hit) {
-        try {
-          const topic = await this.api(`/d2l/api/le/${le}/${ou}/content/topics/${item.id.split(":").slice(2).join(":")}`);
-          if (topic && topic.GradeItemId != null) hit = byId.get(String(topic.GradeItemId));
-        } catch (e) {
-          if (e.code === "signed-out") throw e;
-        }
-      }
-      if (hit) {
-        item.status = "submitted";
-        // When the grade came back, which for Möbius is when it was submitted.
-        item.completedAt = isoOrNull(hit.LastModified) || this.now.toISOString();
-        graded++;
-      }
-    }
-    rep.graded = graded;
   }
 
   /**
