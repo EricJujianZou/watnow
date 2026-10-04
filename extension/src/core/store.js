@@ -114,3 +114,27 @@ export async function setFilter(filter) {
     /* session storage unavailable */
   }
 }
+
+// Separate from state: a school rescan must not erase Google event identities.
+// No access tokens are stored here. Chrome's identity API owns those.
+export function emptyCalendarState() {
+  return { enabled: false, dismissed: false, generation: 0, account: null, accounts: {}, pending: false, revision: 0, status: "off", error: null, lastSyncAt: null, attempts: 0 };
+}
+
+export async function getCalendarState() {
+  const { calendar } = await chrome.storage.local.get("calendar");
+  return { ...emptyCalendarState(), ...calendar };
+}
+
+let calendarChain = Promise.resolve();
+export function updateCalendarState(fn) {
+  const run = calendarChain.then(async () => {
+    const state = await getCalendarState();
+    const next = await fn(state);
+    if (next === false) return state;
+    await chrome.storage.local.set({ calendar: state });
+    return state;
+  });
+  calendarChain = run.catch(() => {});
+  return run;
+}

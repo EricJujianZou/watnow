@@ -1,6 +1,7 @@
 // Reminder, appearance and privacy settings. Mounted in the side panel and on the settings page.
 
-import { getSettings, setSettings } from "../core/store.js";
+import { getSettings, setSettings, getCalendarState } from "../core/store.js";
+import { calendarSettingsHTML, wireCalendarControls } from "./calendar-view.js";
 import { TESTER_BUILD } from "../core/build.js";
 import { LEADS, REMINDER_TYPES } from "../core/reminders.js";
 import { icon, esc } from "./icons.js";
@@ -62,7 +63,7 @@ function leadRow(type, s) {
     </li>`;
 }
 
-function template(s, courses, context) {
+function template(s, courses, context, calendar) {
   const r = s.reminders;
   const leadRows = REMINDER_TYPES.map((t) => leadRow(t, s)).join("");
 
@@ -80,6 +81,7 @@ function template(s, courses, context) {
   return `
   <div class="settings">
     ${context === "panel" && !TESTER_BUILD ? sourceSection(s) : ""}
+    <section class="set-section" aria-labelledby="set-calendar" data-calendar-settings>${calendarSettingsHTML(calendar)}</section>
     <section class="set-section" aria-labelledby="set-rem">
       <h2 id="set-rem">Reminders</h2>
       <h3>Deadline type</h3>
@@ -101,7 +103,7 @@ function template(s, courses, context) {
 
     <section class="set-section" aria-labelledby="set-data">
       <h2 id="set-data">My data</h2>
-      <p class="note" style="margin-top:6px">${icon("lock", 18)}<span>WATnow reads Learn with the session that's already signed in on this browser, so it never sees your password. Your deadlines and settings stay on this computer.</span></p>
+      <p class="note" style="margin-top:6px">${icon("lock", 18)}<span>WATnow reads Learn with the session that's already signed in on this browser, so it never sees your password. Deadlines and settings are saved on this computer. If you connect Google Calendar, deadline details are also sent to your chosen Google account.</span></p>
       <div style="margin-top:16px" data-delete-area>
         <button class="btn btn-danger btn-sm" data-act="ask-delete">Delete my data</button>
       </div>
@@ -112,7 +114,8 @@ function template(s, courses, context) {
 
 export async function mountSettings(root, { courses = [], context = "panel", onDeleted } = {}) {
   let settings = await getSettings();
-  root.innerHTML = template(settings, courses, context);
+  root.innerHTML = template(settings, courses, context, await getCalendarState());
+  wireCalendarControls(root);
 
   // The panel mounts settings into the same element every time it is opened, so
   // the listeners are attached once. Two copies would cancel each other out.
@@ -211,7 +214,7 @@ export async function mountSettings(root, { courses = [], context = "panel", onD
     switch (t.dataset.act) {
       case "ask-delete":
         area.innerHTML = `<div class="confirm" role="group" aria-label="Confirm delete">
-          <p>This deletes everything WATnow saved on this computer, including the items you checked off.</p>
+          <p>This deletes everything WATnow saved on this computer, including the items you checked off, and disconnects Google Calendar. Existing Google Calendar events remain.</p>
           <div class="row-actions">
             <button class="btn btn-danger-solid btn-sm" data-act="confirm-delete">Delete</button>
             <button class="btn btn-quiet btn-sm" data-act="cancel-delete">Keep my data</button>

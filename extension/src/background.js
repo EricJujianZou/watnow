@@ -13,6 +13,8 @@ import { plannedReminders, reminderCopy, movedCopy, unsubmittedCopy, canConfirm 
 import { pingInstall, pingDayActive } from "./core/usage.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
+import { updateCalendarState } from "./core/store.js";
+import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, stopCalendarSync } from "./calendar/calendar-sync.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -57,6 +59,7 @@ async function setup() {
   await scheduleReminders();
   chrome.alarms.create("tick", { periodInMinutes: 5 });
   await syncLiveAlarm();
+  await resumeCalendarSync();
 }
 
 /** Every origin the LIVE site loads from: the school's, its aliases, and the test mock when one stands in. */
@@ -1025,6 +1028,7 @@ async function sendDueRemindersNow() {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === CALENDAR_ALARM) await runCalendarSync();
   if (alarm.name === "reminder") await sendDueReminders();
   if (alarm.name === LIVE_SYNC) {
     const settings = await getSettings();
@@ -1119,6 +1123,7 @@ async function demoReset() {
 
 async function deleteData() {
   modeEpoch++;
+  await stopCalendarSync({ disconnect: true });
   await chrome.alarms.clear(LIVE_SYNC);
   await chrome.storage.local.clear();
   await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
@@ -1238,6 +1243,18 @@ chrome.commands?.onCommand.addListener((command) => {
 });
 
 async function handle(msg, sender) {
+  // Calendar authorization and writes are extension-page actions, never
+  // accepted from the school content script or another extension.
+  if (String(msg?.type || "").startsWith("calendar:")) {
+    if (sender?.id !== chrome.runtime.id || !String(sender.url || "").startsWith(chrome.runtime.getURL(""))) return { ok: false, reason: "Extension page required." };
+    if (msg.type === "calendar:connect") return connectCalendar();
+    if (msg.type === "calendar:change-account") return connectCalendar({ changeAccount: true });
+    if (msg.type === "calendar:disconnect") await stopCalendarSync({ disconnect: true });
+    else if (msg.type === "calendar:dismiss") await updateCalendarState((s) => { s.dismissed = true; });
+    else if (msg.type === "calendar:sync") await requestCalendarSync();
+    else return { ok: false, reason: "Unknown calendar action." };
+    return { ok: true };
+  }
   switch (msg && msg.type) {
     case "panel:opened": {
       await ensureCatalog();
@@ -1317,12 +1334,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
+  // One subscription covers scans, Crowdmark-only reads and every way a
+  // submission can change. Progress/badge writes do not cause calendar work.
+  if (changes.state) {
+    const before = changes.state.oldValue;
+    const after = changes.state.newValue;
+    if (after?.scan?.status === "done" && !after.syncing && (
+      before?.scan?.status !== "done" || before?.lastSyncAt !== after.lastSyncAt ||
+      JSON.stringify(before?.items) !== JSON.stringify(after.items) ||
+      JSON.stringify(before?.courses) !== JSON.stringify(after.courses)
+    )) requestCalendarSync().catch(() => console.warn("Calendar sync could not be queued"));
+  }
   if (changes.settings) {
     const before = changes.settings.oldValue;
     const after = changes.settings.newValue;
     // A new school (or a new mode) starts over: the saved list belongs to the old site.
     if (after && before && (before.mode !== after.mode || (before.school || null) !== (after.school || null))) {
       modeEpoch++;
+      await stopCalendarSync();
       await chrome.alarms.clear("reminder");
       await mutate(() => emptyState());
       await syncLiveAlarm();

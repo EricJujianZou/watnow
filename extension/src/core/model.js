@@ -70,9 +70,9 @@ export function verdict(items, courses, now) {
     const o = overdue[0];
     const day = fmtDueDay(o.dueAt, now);
     const when = day === "Yesterday" ? "yesterday" : day === "Today" ? "today" : `on ${fmtDate(o.dueAt)}`;
-    detail = `${course(o.courseId).code} ${o.title} was due ${when} at ${fmtTime(o.dueAt)} and is still open.`;
+    detail = `${course(o.courseId).code} ${o.title} was due ${when} at ${fmtTime(o.dueAt)}. Not marked complete in WATnow.`;
   } else if (overdue.length > 1) {
-    detail = `${overdue.length} deadlines are past their due date and still open.`;
+    detail = `${overdue.length} past deadlines aren’t marked complete in WATnow.`;
   }
   return { line1, line2, sleepy, detail, counts: { today: t, week: w, overdue: overdue.length } };
 }

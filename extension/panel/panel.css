@@ -73,41 +73,64 @@ body {
   flex: 1;
 }
 
-.cm-btn {
-  flex: none;
-  gap: 6px;
-  min-height: 36px;
-  padding: 0 14px;
-  white-space: nowrap;
+.integration-btn {
+  position: relative;
 }
 
-.cm-btn.is-connected,
-.cm-btn.is-connecting {
-  cursor: default;
+.integration-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--done);
+  box-shadow: 0 0 0 2px var(--sheet);
 }
 
-/* With the Crowdmark button in the bar, the wordmark only fits from 460px up. The mark tile stays. */
-@media (max-width: 459px) {
-  .bar:has(.cm-btn) .brand-name {
-    display: none;
-  }
+.integration-btn.is-attention .integration-dot {
+  background: var(--late);
 }
 
-/* Narrow side panels: tighten the bar so the mark tile keeps its size. */
+.integration-btn.is-connecting .integration-dot {
+  background: var(--accent-press);
+}
+
+.integration-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1;
+  width: max-content;
+  max-width: 240px;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+  background: var(--ink);
+  color: var(--sheet);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  box-shadow: var(--clay-sm);
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* Bridge the gap so the label stays visible when the pointer moves onto it. */
+.integration-tip::before {
+  content: "";
+  position: absolute;
+  inset: -10px 0 100%;
+}
+
+.integration-btn:hover .integration-tip,
+.integration-btn:focus-visible .integration-tip {
+  opacity: 1;
+  visibility: visible;
+}
+
 @media (max-width: 399px) {
-  .bar:has(.cm-btn) {
-    gap: 4px;
-  }
-
-  .cm-btn {
-    padding: 0 10px;
-    font-size: 13px;
-  }
-}
-
-@media (max-width: 339px) {
-  .cm-btn {
-    padding: 0 6px;
+  .bar:has(.integration-btn) .brand-name {
+    display: none;
   }
 }
 
