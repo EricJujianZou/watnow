@@ -44,6 +44,7 @@ const nowIso = () => new Date().toISOString();
 async function setup() {
   await migrateSchool();
   await syncBridge().catch((e) => console.warn("bridge", e));
+  await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
   // Chrome: clicking the toolbar icon opens the side panel. Gecko has no
   // sidePanel API, so there the action click toggles the sidebar (see below).
   if (HAS_SIDE_PANEL) {
@@ -95,6 +96,7 @@ async function migrateSchool() {
 }
 
 const BRIDGE_ID = "school-bridge";
+const CM_BRIDGE_ID = "crowdmark-bridge";
 
 /**
  * The manifest runs the bridge on Waterloo Learn only. Another school's pages
@@ -116,8 +118,54 @@ async function syncBridge() {
   await chrome.scripting.registerContentScripts([{ id: BRIDGE_ID, matches: patterns, js: ["src/content/learn-bridge.js"], runAt: "document_start", persistAcrossSessions: true }]);
 }
 
-chrome.permissions.onAdded.addListener(() => syncBridge());
-chrome.permissions.onRemoved.addListener(() => syncBridge());
+/**
+ * Crowdmark is an optional permission, so its bridge is never in the manifest.
+ * It goes on once the student connects Crowdmark and comes off when they
+ * disconnect, so no script runs on a site they have not asked for.
+ */
+async function syncCrowdmarkBridge() {
+  if (!chrome.scripting) return;
+  const settings = await getSettings();
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [CM_BRIDGE_ID] });
+  } catch {
+    /* not registered */
+  }
+  if (!(await crowdmarkAllowed(settings))) return;
+  const matches = [`${crowdmarkBase(settings)}/*`];
+  try {
+    await chrome.scripting.registerContentScripts([{ id: CM_BRIDGE_ID, matches, js: ["src/content/crowdmark-bridge.js"], runAt: "document_end", persistAcrossSessions: true }]);
+  } catch (e) {
+    console.warn("crowdmark bridge", e);
+    return;
+  }
+  // Registering only covers pages loaded from here on, and a student who just
+  // connected may already have Crowdmark open. Those tabs get the bridge now,
+  // so the first read can use one instead of waiting for a fresh page.
+  let open = [];
+  try {
+    open = await chrome.tabs.query({ url: matches });
+  } catch {
+    return;
+  }
+  for (const tab of open) {
+    if (tab.discarded) continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/content/crowdmark-bridge.js"] });
+    } catch {
+      // The tab went away, or it isn't a page scripts can run on.
+    }
+  }
+}
+
+chrome.permissions.onAdded.addListener(() => {
+  syncBridge();
+  syncCrowdmarkBridge();
+});
+chrome.permissions.onRemoved.addListener(() => {
+  syncBridge();
+  syncCrowdmarkBridge();
+});
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") pingInstall();
@@ -294,6 +342,32 @@ async function syncLiveAlarm() {
   if (!existing) chrome.alarms.create(LIVE_SYNC, { delayInMinutes: 30, periodInMinutes: 30 });
 }
 
+/**
+ * Runs one GET through an open Crowdmark tab's content script
+ * (crowdmark-bridge.js), for a browser that won't attach the Crowdmark session
+ * to a request from the background. Only called after a read looked signed out.
+ */
+async function crowdmarkRelay(path) {
+  const settings = await getSettings();
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: `${crowdmarkBase(settings)}/*` });
+  } catch {
+    return { noTab: true };
+  }
+  tabs.sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0));
+  for (const tab of tabs) {
+    if (tab.discarded) continue;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: "crowdmark:fetch", path });
+      if (res) return res;
+    } catch {
+      // No bridge in this tab. A tab opened before the bridge was registered needs a reload.
+    }
+  }
+  return { noTab: true };
+}
+
 /** Runs one GET through an open Learn tab's content script (learn-bridge.js). */
 async function relayFetch(base, path) {
   let tabs = [];
@@ -368,7 +442,7 @@ async function addCrowdmark(settings, learnCourses, readOk, prevCourses, allowed
     for (const c of learnCourses) markOk(c.id);
     return { status: "off", courses: [], items: [], report: null };
   }
-  const cm = await readCrowdmark(settings, learnCourses);
+  const cm = await readCrowdmark(settings, learnCourses, { relay: crowdmarkRelay });
   if (cm.status !== "ok") return { status: cm.status, courses: before, items: [], report: cm.report };
   const had = new Set(before.map((c) => c.id));
   const courses = cm.courses.filter((c) => !c.readFailed || had.has(c.id)).map(({ readFailed, ...c }) => c);
@@ -967,7 +1041,7 @@ async function submissionCheck(settings, item) {
 
 /** Asks Learn or Crowdmark, whichever the item lives on. */
 function askSubmitted(settings, item) {
-  return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item) : submissionCheck(settings, item);
+  return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item, crowdmarkRelay) : submissionCheck(settings, item);
 }
 
 function siteName(settings, item) {
@@ -1069,8 +1143,15 @@ self.addEventListener("online", () => {
 // extensions button. Giving it back reads Learn straight away, so they don't
 // have to find the retry button.
 chrome.permissions?.onAdded?.addListener(async (added) => {
-  if (!(added.origins || []).length || scanning) return;
-  if ((await getSettings()).mode === "live") runScan();
+  const origins = added.origins || [];
+  if (!origins.length || scanning) return;
+  const settings = await getSettings();
+  if (settings.mode !== "live") return;
+  // Connecting Crowdmark grants an origin too, and that reads Crowdmark on its
+  // own. Only access to the course site coming back is worth a full read.
+  const live = liveOrigins(settings);
+  if (!origins.some((o) => live.some((l) => o.startsWith(l)))) return;
+  runScan();
 });
 
 /* ------------------------------------------------------------------ */
@@ -1330,6 +1411,16 @@ async function handle(msg, sender) {
     }
     case "crowdmark:connect":
       return { ok: true, status: await readCrowdmarkOnly() };
+    case "crowdmark:page": {
+      // The bridge is on a Crowdmark page, so a read that looked signed out
+      // now has a tab to run through. onUpdated above covers the same ground,
+      // and readCrowdmarkOnly ignores the second caller.
+      const settings = await getSettings();
+      if (settings.mode !== "live") return { ok: true };
+      const st = await getState();
+      if (!st.crowdmark || st.crowdmark.status !== "ok") readCrowdmarkOnly();
+      return { ok: true };
+    }
     case "crowdmark:probe":
       return { ok: true, report: await probeCrowdmark("worker") };
     case "settings:changed":

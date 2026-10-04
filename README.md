@@ -61,18 +61,21 @@ The user count on the Chrome Web Store runs a few days behind these numbers.
 
 ## Install
 
-Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). The Firefox build, for Firefox, Nightly, Zen, LibreWolf and other Firefox-based browsers, is not on addons.mozilla.org yet; until it is, build it from this repo with the steps under "Running it from this repo". Then sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in.
+Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). The Firefox build, for Firefox, Nightly, Zen, LibreWolf and other Firefox-based browsers, is not on addons.mozilla.org yet; until it is, build it from this repo with the steps under "Running it from this repo". Then sign in to learn.uwaterloo.ca, click the WATnow icon in your toolbar, and the panel fills itself in. Waterloo students can also select **Connect Crowdmark** in the panel to see Crowdmark deadlines beside their Learn ones.
 
 Firefox for Android is not supported, because extensions cannot open a sidebar there.
 
 ## What it does with your data
 
-This repo is public so you can read exactly what the extension does with your Learn account before you install it.
+This repo is public so you can read exactly what the extension does with your course accounts before you install it.
 
-- It reads Learn from inside your browser, using the session you're already signed in with. It never sees your password.
-- It only sends GET requests to `learn.uwaterloo.ca/d2l/api/`, so it can't change anything on Learn.
+- It reads your course site from inside your browser, using the session you're already signed in with. It never sees your password.
+- It only sends GET requests, so it can't change anything on any site it reads.
+- Waterloo's Learn is the only site it can reach when you install it. Every other site is an optional permission your browser asks you about, and nothing is read from one until you say yes:
+  - another school's Brightspace, if you pick that school instead of Waterloo. WATnow reads the same `/d2l/api/` routes on it.
+  - Crowdmark, if you select **Connect Crowdmark**. It reads `app.crowdmark.com/api/v2/student/` for your courses and their assignment due dates. Disconnecting takes the permission away and its deadlines leave the panel on the next check.
 - Your courses, deadlines and settings are saved in your browser's extension storage on your own computer.
-- The Chrome build sends one thing: an anonymous count, once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from Learn. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
+- The Chrome build sends one thing: an anonymous count, once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from Learn or Crowdmark. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
 - The Firefox build sends nothing at all. That is what the `data_collection_permissions` of `none` in the manifest means, and `usage.js` returns early on Firefox.
 
 The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
@@ -81,7 +84,7 @@ The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
 This section is for developers. Most people should use the Chrome Web Store link above, which also keeps the extension updated.
 
-`extension/` is the same build that goes to the stores: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. One folder serves both browsers, so its `manifest.json` carries both sets of keys (`service_worker` and `scripts`, `side_panel` and `sidebar_action`) and the code picks between them at runtime in [`extension/src/core/env.js`](extension/src/core/env.js). Each browser ignores the other's keys with a warning.
+`extension/` is the same build that goes to the stores: it reads live course sites only, and the demo fixtures used for recording videos are stripped out. One folder serves both browsers, so its `manifest.json` carries both sets of keys (`service_worker` and `scripts`, `side_panel` and `sidebar_action`) and the code picks between them at runtime in [`extension/src/core/env.js`](extension/src/core/env.js). Each browser ignores the other's keys with a warning.
 
 **Chrome.** Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
 
