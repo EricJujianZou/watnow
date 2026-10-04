@@ -29,6 +29,31 @@ let busy = false;
 
 const signInUrl = () => `${crowdmarkBase(settings)}/sign-in/waterloo`;
 
+/**
+ * Granting access by hand, for a browser whose prompt never arrives. Firefox
+ * lists every optional host permission on the add-on's own Permissions page,
+ * with a switch, so access can be given there instead. onAdded is listening, so
+ * turning it on carries straight on to Crowdmark without coming back here.
+ */
+function manualHTML() {
+  return `
+    <div class="sheet">
+      <section class="set-section">
+        <h2>Or turn it on yourself</h2>
+        <p class="set-help">If no prompt appears, your browser can give ${esc(APP)} access from its own add-ons page:</p>
+        <ol class="set-help">
+          <li>Open <strong>about:addons</strong> and select ${esc(APP)}.</li>
+          <li>Open the <strong>Permissions</strong> tab.</li>
+          <li>Turn on <strong>Access your data for app.crowdmark.com</strong>.</li>
+        </ol>
+        <p class="set-help">This page carries on by itself once that is on.</p>
+        <div class="row-actions" style="margin-top:12px">
+          <button class="btn btn-quiet btn-sm" data-act="addons">Open the add-ons page</button>
+        </div>
+      </section>
+    </div>`;
+}
+
 function render({ note = "", refused = false } = {}) {
   const label = refused ? "Try again" : "Connect Crowdmark";
   page.innerHTML = `
@@ -52,23 +77,52 @@ function render({ note = "", refused = false } = {}) {
         </div>
         <p class="status-text" role="status">${esc(note)}</p>
       </section>
-    </div>`;
+    </div>
+    ${refused ? manualHTML() : ""}`;
+}
+
+/**
+ * Asks for the origins and says whether access is there afterwards.
+ *
+ * What request() hands back can't be trusted on its own. Gecko's chrome
+ * namespace is callback-based for some APIs, so awaiting it can give undefined
+ * even though the student chose Allow, and in a sidebar it rejects outright
+ * (bugzilla 1493396). permissions.contains() afterwards is the answer that
+ * counts; the returned value only covers a browser that granted it a moment
+ * later. The error text is kept so a refusal can say what actually happened.
+ *
+ * browser.* is preferred where it exists, since that is the promise-based
+ * namespace on Gecko.
+ */
+async function askFor(origins) {
+  const api = (globalThis.browser && globalThis.browser.permissions) || chrome.permissions;
+  let returned;
+  let error = "";
+  try {
+    // Straight from the click, with nothing awaited first, or the prompt never shows.
+    returned = await api.request({ origins });
+  } catch (e) {
+    error = String((e && e.message) || e);
+  }
+  const has = await chrome.permissions.contains({ origins }).catch(() => false);
+  return { granted: has || returned === true, error };
 }
 
 async function connect() {
   if (busy) return;
   const origins = [`${crowdmarkBase(settings)}/*`];
-  let granted = false;
-  try {
-    // Straight from the click, with nothing awaited first, or the prompt is refused outright.
-    granted = await chrome.permissions.request({ origins });
-  } catch {
-    granted = false;
-  }
+  const { granted, error } = await askFor(origins);
   if (!granted) {
-    render({ note: `${APP} can't read Crowdmark without access to it. Select Try again and choose Allow.`, refused: true });
+    const why = error ? ` Your browser said: ${error}` : "";
+    render({ note: `${APP} can't read Crowdmark without access to it. Select Try again and choose Allow.${why}`, refused: true });
     return;
   }
+  await handOver();
+}
+
+/** Access is there: let the background set up, then take this tab to Crowdmark. */
+async function handOver() {
+  if (busy) return;
   busy = true;
   render();
   // Lets the background register the Crowdmark bridge before this tab leaves for
@@ -82,6 +136,18 @@ page.addEventListener("click", (e) => {
   if (!t) return;
   if (t.dataset.act === "connect") connect();
   if (t.dataset.act === "close") window.close();
+  if (t.dataset.act === "addons") {
+    // Firefox allows this; anywhere it doesn't, the steps above still say where to go.
+    chrome.tabs.create({ url: "about:addons" }).catch(() => {});
+  }
+});
+
+/** Access given from the browser's own add-ons page lands here, and goes on as if the prompt had worked. */
+chrome.permissions?.onAdded?.addListener(async () => {
+  if (busy) return;
+  const origins = [`${crowdmarkBase(settings)}/*`];
+  const has = await chrome.permissions.contains({ origins }).catch(() => false);
+  if (has) handOver();
 });
 
 (async function init() {
