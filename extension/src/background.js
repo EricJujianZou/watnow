@@ -1441,14 +1441,23 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes.settings) {
     const before = changes.settings.oldValue;
     const after = changes.settings.newValue;
-    // A new school (or a new mode) starts over: the saved list belongs to the old site.
-    if (after && before && (before.mode !== after.mode || (before.school || null) !== (after.school || null))) {
-      modeEpoch++;
-      await chrome.alarms.clear("reminder");
-      await mutate(() => emptyState());
-      await syncLiveAlarm();
-      await refreshBadge();
-      await syncBridge().catch((e) => console.warn("bridge", e));
+    if (after && before) {
+      const schoolBefore = before.school || null;
+      const schoolAfter = after.school || null;
+      const schoolChanged = schoolBefore !== schoolAfter;
+      // migrateSchool() fills in Waterloo for an install from before the school
+      // picker. That is the same site it has been reading all along, so its
+      // saved list, reminders and badge stay; only a real change starts over.
+      const migrated = schoolChanged && !schoolBefore && schoolAfter === DEFAULT_SCHOOL;
+      // A new school (or a new mode) starts over: the saved list belongs to the old site.
+      if (before.mode !== after.mode || (schoolChanged && !migrated)) {
+        modeEpoch++;
+        await chrome.alarms.clear("reminder");
+        await mutate(() => emptyState());
+        await syncLiveAlarm();
+        await refreshBadge();
+      }
+      if (schoolChanged) await syncBridge().catch((e) => console.warn("bridge", e));
     }
     if (after && before && before.learnBase !== after.learnBase) {
       const cat = await getCatalog();
