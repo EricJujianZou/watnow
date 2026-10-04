@@ -54,12 +54,16 @@ export function plannedReminders(items, settings, now = new Date()) {
   const muted = new Set(settings.reminders.mutedCourses);
   const out = [];
   for (const item of items) {
-    if (item.status !== "open" || muted.has(item.courseId)) continue;
+    // A checked-off item Learn or Crowdmark can confirm keeps its last
+    // reminder. It only goes out if no submission shows up by then.
+    const checkedOff = item.status === "done" && settings.mode === "live" && canConfirm(item);
+    if ((item.status !== "open" && !checkedOff) || muted.has(item.courseId)) continue;
     if ((settings.reminders.offTypes || []).includes(item.category)) continue;
     const due = new Date(item.dueAt);
     if (due <= now) continue;
     const leads = settings.reminders.leads[item.category] || [];
     const seen = new Set();
+    const mine = [];
     for (const lead of leads) {
       const fireAt = leadTime(lead, due);
       if (!fireAt) continue;
@@ -67,8 +71,10 @@ export function plannedReminders(items, settings, now = new Date()) {
       const stamp = Math.round(fireAt.getTime() / 60000);
       if (seen.has(stamp)) continue;
       seen.add(stamp);
-      out.push({ key: `${item.id}:${lead}:${item.dueAt}`, itemId: item.id, lead, fireAt });
+      mine.push({ key: `${item.id}:${lead}:${item.dueAt}`, itemId: item.id, lead, fireAt });
     }
+    if (checkedOff) mine.sort((a, b) => b.fireAt - a.fireAt).splice(1);
+    out.push(...mine);
   }
   return out.sort((a, b) => a.fireAt - b.fireAt);
 }
@@ -80,6 +86,28 @@ const PENDING = {
   discussion: "you haven't posted yet",
   content: "it isn't marked complete yet",
 };
+
+/** True when Learn or Crowdmark can say whether this item was handed in. */
+export function canConfirm(item) {
+  return item.kind === "dropbox" || item.kind === "quiz" || item.kind === "crowdmark";
+}
+
+/**
+ * Notification text for an item the student checked off that still shows no
+ * submission. `site` is where it goes in: Learn, or Crowdmark.
+ */
+export function unsubmittedCopy(item, course, site, now = new Date()) {
+  const due = new Date(item.dueAt);
+  const days = dayDiff(due, now);
+  const time = fmtTime(due);
+  let when;
+  if (due - now <= 3 * HOUR) when = fmtUntil(due, now);
+  else if (days === 0) when = `at ${time}`;
+  else if (days === 1) when = `tomorrow at ${time}`;
+  else when = `${fmtWeekday(due)} at ${time}`;
+  const verb = item.category === "quiz" ? "Closes" : "Due";
+  return { title: `You checked off ${course.code} ${item.title} but ${site} has no submission`, message: `${verb} ${when}.` };
+}
 
 /** Notification text for a reminder. Always names the course and the item. */
 export function reminderCopy(item, course, now = new Date()) {

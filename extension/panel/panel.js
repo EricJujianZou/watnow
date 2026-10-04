@@ -1,11 +1,13 @@
-import { getState, getSettings, getFilter, setFilter, emptyState } from "../src/core/store.js";
+import { getState, getSettings, setSettings, getFilter, setFilter, emptyState } from "../src/core/store.js";
 import { buildModel } from "../src/core/model.js";
 import { fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
 import { icon, brandMark, esc, CATEGORY_ICON } from "../src/ui/icons.js";
 import { mountSettings, applyTheme } from "../src/ui/settings-view.js";
 import { liveBase } from "../src/data/live-source.js";
+import { SCHOOLS, schoolById, currentSchool, systemName, homeUrl } from "../src/core/schools.js";
 import { TESTER_BUILD } from "../src/core/build.js";
 import { pingPanelOpen } from "../src/core/usage.js";
+import { crowdmarkAllowed, crowdmarkBase } from "../src/data/crowdmark-source.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const PREVIEW = new URLSearchParams(location.search).get("preview");
@@ -25,6 +27,11 @@ let sawRunning = false;
 let advanceTimer = null;
 let earlierOpen = false;
 let listScroll = 0;
+/** Whether Chrome gave WATnow access to Crowdmark. Checked on open and whenever the permission changes. */
+let cmAllowed = false;
+/** Set from the Connect click until Crowdmark reads or the student gives up, so the button can say Connecting. */
+let cmConnectingUntil = 0;
+const CM_CONNECT_WAIT_MS = 3 * 60 * 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (type, extra = {}) => chrome.runtime.sendMessage({ type, ...extra }).catch(() => null);
@@ -34,6 +41,16 @@ let queue = Promise.resolve();
 function enqueue(fn) {
   queue = queue.then(fn).catch((e) => console.error(e));
   return queue;
+}
+
+/** What students call the site WATnow reads: "Learn", "onQ", "OWL". The demo is always Learn. */
+function lms() {
+  return settings && settings.mode === "live" ? systemName(settings) : "Learn";
+}
+
+/** LIVE mode with no school picked: the panel asks for one before it reads anything. */
+function needsSchool() {
+  return !PREVIEW && !!settings && settings.mode === "live" && !currentSchool(settings);
 }
 
 function announce(text) {
@@ -53,19 +70,71 @@ function renderBar() {
   const scan = state.scan.status;
   let status = "";
   if (PREVIEW) status = "";
-  else if (scan === "running") status = `<span class="bar-status">Reading Learn</span>`;
-  else if (state.syncing) status = `<span class="bar-status">Checking Learn</span>`;
+  else if (scan === "running") status = `<span class="bar-status">Reading ${lms()}</span>`;
+  else if (state.syncing) status = `<span class="bar-status">Checking ${lms()}</span>`;
   const busy = scan === "running" || state.syncing;
   const refresh =
     PREVIEW || (scan !== "done" && !busy)
       ? ""
-      : `<button class="icon-btn" data-act="refresh" aria-label="${busy ? "Reading Learn" : "Check Learn for changes"}" ${busy ? "disabled" : ""}>${icon("refresh", 20, busy ? "spin" : "")}</button>`;
+      : `<button class="icon-btn" data-act="refresh" aria-label="${busy ? `Reading ${lms()}` : `Check ${lms()} for changes`}" ${busy ? "disabled" : ""}>${icon("refresh", 20, busy ? "spin" : "")}</button>`;
+  // The bar can't fit both the Crowdmark button and the status pill at side panel widths; the spinning refresh still shows a check is running.
+  const cmBtn = cmButtonHTML(scan);
+  if (cmBtn) status = "";
   bar.innerHTML = `
     <div class="brand"><span class="mark-tile">${brandMark(24)}</span><span class="brand-name">${esc(APP)}</span></div>
     <span class="spacer"></span>
     ${status}
+    ${cmBtn}
     ${refresh}
     <button class="icon-btn" data-act="settings" aria-label="Reminders and settings">${icon("gear")}</button>`;
+}
+
+/** True when Crowdmark is connected but its last read failed. */
+function cmDown() {
+  const cm = state.crowdmark;
+  return cmAllowed && !cmConnecting() && !!cm && (cm.status === "signed-out" || cm.status === "unreachable");
+}
+
+function cmConnecting() {
+  if (!cmConnectingUntil) return false;
+  if (Date.now() > cmConnectingUntil || (state.crowdmark && state.crowdmark.status === "ok")) {
+    cmConnectingUntil = 0;
+    return false;
+  }
+  return true;
+}
+
+/** Left of refresh: yellow Connect until Crowdmark reads, then a quiet Connected label. Waterloo only for now. */
+function cmButtonHTML(scan) {
+  if (PREVIEW || scan !== "done" || !settings || settings.mode !== "live" || settings.school !== "uwaterloo") return "";
+  if (cmConnecting()) return `<span class="btn btn-primary btn-sm cm-btn is-connecting" role="status">${icon("refresh", 16, "spin")}Connecting…</span>`;
+  if (cmAllowed && !cmDown()) return `<span class="btn btn-quiet btn-sm cm-btn is-connected">Crowdmark Connected</span>`;
+  return `<button class="btn btn-primary btn-sm cm-btn" data-act="cm-connect">Connect Crowdmark</button>`;
+}
+
+async function refreshCm() {
+  cmAllowed = await crowdmarkAllowed(settings);
+  renderBar();
+}
+
+/** Asks Chrome for Crowdmark access, then reads. If access is already there, the student needs to sign in again. */
+async function connectCrowdmark() {
+  const base = crowdmarkBase(settings);
+  if (!cmAllowed) {
+    const ok = await chrome.permissions.request({ origins: [`${base}/*`] }).catch(() => false);
+    if (!ok) return;
+    cmAllowed = true;
+  }
+  cmConnectingUntil = Date.now() + CM_CONNECT_WAIT_MS;
+  renderBar();
+  const res = await chrome.runtime.sendMessage({ type: "crowdmark:connect" }).catch(() => null);
+  const status = res && res.status;
+  // Not signed in yet: open the sign-in page and keep saying Connecting. The
+  // background reads Crowdmark again as soon as the sign-in finishes.
+  if (status === "signed-out") chrome.tabs.create({ url: `${base}/sign-in/waterloo` });
+  else if (status !== "ok") cmConnectingUntil = 0;
+  renderBar();
+  if (view === "list") renderList();
 }
 
 window.addEventListener("scroll", () => bar.classList.toggle("is-scrolled", window.scrollY > 4), { passive: true });
@@ -82,8 +151,8 @@ function scanCopy() {
   const handed = state.items.filter((i) => i.status !== "open").length;
   const courses = state.courses.length;
   return done
-    ? { title: "Done reading Learn", sub: "Opening your deadlines." }
-    : { title: "Reading your courses on Learn", sub: "WATnow uses the Learn session that's already signed in on this browser." };
+    ? { title: `Done reading ${lms()}`, sub: "Opening your deadlines." }
+    : { title: `Reading your courses on ${lms()}`, sub: `WATnow uses the ${lms()} session that's already signed in on this browser.` };
 }
 
 function scanRowState(p) {
@@ -106,7 +175,7 @@ function renderScan() {
           <p class="scan-sub"></p>
           <ol class="scan-list"></ol>
         </div>
-        <p class="privacy">${icon("lock", 18)}<span>WATnow never sees your Learn password. What it reads stays on this computer.</span></p>
+        <p class="privacy">${icon("lock", 18)}<span>WATnow never sees your ${esc(lms())} password. What it reads stays on this computer.</span></p>
       </section>`;
     root = app.querySelector(".scan");
     root.querySelector(".scan-h").textContent = copy.title;
@@ -138,7 +207,10 @@ function renderScan() {
     if (list.children.length !== sc.courses.length || list.querySelector(".is-skeleton")) {
       list.innerHTML = sc.courses
         .map((p) => {
-          const c = state.courses.find((x) => x.id === p.courseId) || { code: "", name: "", color: "mint" };
+          const c =
+            p.courseId === "crowdmark"
+              ? { id: "crowdmark", code: "Crowdmark", name: "", color: "mint" }
+              : state.courses.find((x) => x.id === p.courseId) || { code: "", name: "", color: "mint" };
           return `<li class="scan-row hl-${c.color}" data-course="${c.id}" data-status="waiting"><span class="scan-fill" aria-hidden="true"></span><span class="chip">${esc(c.code)}</span>${c.name ? `<span class="scan-name">${esc(c.name)}</span>` : ""}<span class="scan-state">Waiting</span></li>`;
         })
         .join("");
@@ -174,13 +246,13 @@ function rowHTML(r) {
   const done = r.status !== "open";
   const name = `${r.code} ${r.title}`;
   const checkLabel =
-    r.status === "submitted" ? `${name} is submitted on Learn` : r.status === "done" ? `${name} is checked off. Select to undo.` : `Check off ${name}`;
+    r.status === "submitted" ? `${name} is submitted on ${lms()}` : r.status === "done" ? `${name} is checked off. Select to undo.` : `Check off ${name}`;
   const topIcon = r.tone === "overdue" ? icon("alert", 16) : r.tone === "soon" ? icon("clock", 16) : "";
   const moved = r.movedFrom
     ? `<span class="moved">${icon("arrow", 16)}<span>Moved from <span class="was">${esc(r.movedFrom)}</span></span></span>`
     : "";
   return `
-  <li class="row tone-${r.tone} hl-${r.color}${r.movedFrom ? " is-moved" : ""}" data-id="${esc(r.id)}" data-flip="r-${esc(r.id)}">
+  <li class="row tone-${r.tone} hl-${r.color}${r.movedFrom ? " is-moved" : ""}${r.handIn === "missing" ? " is-unsent" : ""}" data-id="${esc(r.id)}" data-flip="r-${esc(r.id)}">
     <button class="check" data-act="toggle" data-id="${esc(r.id)}" aria-pressed="${done}" ${r.status === "submitted" ? 'aria-disabled="true"' : ""} aria-label="${esc(checkLabel)}">
       <span class="check-ring">${icon("check", 14, "check-mark")}</span>
     </button>
@@ -197,7 +269,20 @@ function rowHTML(r) {
         <span class="due-bottom"><span class="due-time${r.timeOdd ? " is-odd" : ""}">${esc(r.time)}</span></span>
       </span>
     </button>
+    ${handInHTML(r)}
   </li>`;
+}
+
+/** Under a checked-off row: asking the site, or the site shows nothing handed in. */
+function handInHTML(r) {
+  const site = r.kind === "crowdmark" ? "Crowdmark" : lms();
+  if (r.handIn === "checking") {
+    return `<p class="handin is-checking" role="status"><span class="handin-bar" aria-hidden="true"></span><span>Checking ${esc(site)} for your submission</span></p>`;
+  }
+  if (r.handIn !== "missing") return "";
+  const where = r.kind === "crowdmark" ? "Crowdmark" : r.kind === "quiz" ? "quiz" : "dropbox";
+  return `<p class="handin is-missing" role="status">${icon("alert", 16)}<span>${esc(site)} doesn't show a submission for this yet.</span>
+    <button class="handin-open" data-act="open" data-id="${esc(r.id)}">Open ${where}</button></p>`;
 }
 
 function groupHTML(g) {
@@ -214,12 +299,21 @@ function groupHTML(g) {
 /** Shown above the list when the last check couldn't read Learn. */
 function staleHTML(now) {
   const st = state.stale;
-  if (!st || !state.lastSyncAt) return "";
-  const at = new Date(state.lastSyncAt);
+  const cm = cmDown() ? state.crowdmark : null;
+  const lastAt = st ? state.lastSyncAt : cm && (cm.okAt || state.lastSyncAt);
+  if ((!st && !cm) || !lastAt) return "";
+  const at = new Date(lastAt);
   const when = sameDay(at, now) ? `at ${fmtTime(at)}` : `on ${fmtDate(at)} at ${fmtTime(at)}`;
-  const lead = st.kind === "signed-out" ? "Learn signed you out." : "Couldn't reach Learn.";
-  const action = st.kind === "unreachable" ? "" : `<button class="link-btn stale-btn" data-act="open-learn">Open Learn</button>`;
-  return `<div class="stale" role="status" data-flip="stale">${icon("info", 16)}<p>${esc(`${lead} Showing what ${APP} read ${when}.`)}</p>${action}</div>`;
+  let lead;
+  if (st && cm && st.kind === cm.status) lead = st.kind === "signed-out" ? `${lms()} and Crowdmark signed you out.` : `Couldn't reach ${lms()} or Crowdmark.`;
+  else {
+    const learnLead = !st ? "" : st.kind === "signed-out" ? `${lms()} signed you out.` : `Couldn't reach ${lms()}.`;
+    const cmLead = !cm ? "" : cm.status === "signed-out" ? "Crowdmark signed you out." : "Couldn't reach Crowdmark.";
+    lead = [learnLead, cmLead].filter(Boolean).join(" ");
+  }
+  const tail = st ? `Showing what ${APP} read ${when}.` : `Crowdmark deadlines are from ${when}.`;
+  const action = !st || st.kind === "unreachable" ? "" : `<button class="link-btn stale-btn" data-act="open-learn">Open ${lms()}</button>`;
+  return `<div class="stale" role="status" data-flip="stale">${icon("info", 16)}<p>${esc(`${lead} ${tail}`)}</p>${action}</div>`;
 }
 
 function renderList() {
@@ -238,7 +332,7 @@ function renderList() {
   const empty =
     m.filterCourse && m.openInFilter === 0
       ? `<div class="empty" data-flip="empty">${icon("check", 22)}<h2>Nothing to hand in for ${esc(m.filterCourse.code)}.</h2><p>${
-          m.groups.some((g) => g.id === "earlier") ? "Anything you already handed in is under Handed in earlier." : "New items show up here when your prof posts them on Learn."
+          m.groups.some((g) => g.id === "earlier") ? "Anything you already handed in is under Handed in earlier." : `New items show up here when your prof posts them on ${lms()}.`
         }</p></div>`
       : "";
 
@@ -407,6 +501,68 @@ async function animatePing(itemId) {
 }
 
 /* ------------------------------------------------------------------ */
+/* School picker                                                       */
+/* ------------------------------------------------------------------ */
+
+// Waterloo first, since most students are there, then the rest by name.
+const PICK_ORDER = [SCHOOLS[0], ...SCHOOLS.slice(1).sort((a, b) => a.name.localeCompare(b.name))];
+
+function pickButtonLabel(school) {
+  return school ? `Open ${school.system}` : "Open your course site";
+}
+
+function renderSchoolPicker() {
+  const options = PICK_ORDER.map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join("");
+  app.innerHTML = `
+    <div class="pick">
+      <section class="state">
+        <div class="state-mark">${icon("cap", 24)}</div>
+        <h1>Choose your school</h1>
+        <p>WATnow reads your deadlines from your school's course site, using the session that's already signed in on this browser.</p>
+        <label class="pick-label" for="school-select">School</label>
+        <select class="select pick-select" id="school-select">
+          <option value="" disabled selected>Select your school</option>
+          ${options}
+        </select>
+        <button class="btn btn-primary" data-act="pick-school" disabled>${esc(pickButtonLabel(null))}</button>
+        <p class="status-text pick-status" role="status"></p>
+        <p class="pick-note">Don't see your school? WATnow works with schools that use D2L Brightspace. Message Eric on Instagram @sleppyeric and he'll add yours.</p>
+      </section>
+      <p class="privacy">${icon("lock", 18)}<span>WATnow never sees your password. What it reads stays on this computer.</span></p>
+    </div>`;
+}
+
+app.addEventListener("change", (e) => {
+  if (!e.target.matches("#school-select")) return;
+  const school = schoolById(e.target.value);
+  const btn = app.querySelector('[data-act="pick-school"]');
+  btn.disabled = !school;
+  btn.textContent = pickButtonLabel(school);
+  app.querySelector(".pick-status").textContent = "";
+});
+
+/**
+ * Asks Chrome for access to the school's site (Waterloo's is granted at install),
+ * then saves the pick and opens the site so the student can sign in.
+ * chrome.permissions.request has to run straight from the click, before any await.
+ */
+function pickSchool() {
+  const school = schoolById(app.querySelector("#school-select")?.value);
+  if (!school) return;
+  const status = app.querySelector(".pick-status");
+  const origins = [school.origin, ...(school.aliases || [])].map((o) => `${o}/*`);
+  const ask = school.id === SCHOOLS[0].id ? Promise.resolve(true) : chrome.permissions.request({ origins }).catch(() => false);
+  ask.then(async (granted) => {
+    if (!granted) {
+      status.textContent = `WATnow needs access to ${school.system} to read your deadlines. Select ${pickButtonLabel(school)} again and choose Allow.`;
+      return;
+    }
+    await setSettings({ school: school.id });
+    send("school:open");
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* Other whole-panel states                                            */
 /* ------------------------------------------------------------------ */
 
@@ -414,44 +570,51 @@ function renderStateView(kind) {
   const views = {
     "signed-out": {
       mark: icon("lock", 24),
-      title: "Sign in to Learn first",
-      body: "WATnow reads Learn through the session in this browser. Open Learn and sign in. Your deadlines show up here once a Learn page loads. If they don't, select Try again.",
-      action: `<div class="row-actions"><button class="btn btn-primary" data-act="open-learn">Open Learn</button><button class="btn btn-quiet" data-act="retry">Try again</button></div>`,
+      title: `Sign in to ${lms()} first`,
+      body: `WATnow reads ${lms()} through the session in this browser. Open ${lms()} and sign in. Your deadlines show up here once a ${lms()} page loads. If they don't, select Try again.`,
+      action: `<div class="row-actions"><button class="btn btn-primary" data-act="open-learn">Open ${lms()}</button><button class="btn btn-quiet" data-act="retry">Try again</button></div>${changeSchoolHTML()}`,
     },
     offline: {
       mark: icon("alert", 24),
-      title: "Couldn't reach Learn",
+      title: `Couldn't reach ${lms()}`,
       body: "Check that this computer is online, then try again.",
       action: `<button class="btn btn-primary" data-act="retry">Try again</button>`,
     },
     error: {
       mark: icon("alert", 24),
       late: true,
-      title: "Couldn't read Learn",
-      body: "Learn didn't respond. Check that you're still signed in, then try again.",
+      title: `Couldn't read ${lms()}`,
+      body: `${lms()} didn't respond. Check that you're still signed in, then try again.`,
       action: `<button class="btn btn-primary" data-act="retry">Try again</button>`,
     },
     "no-courses": {
       mark: icon("info", 24),
-      title: "No courses on Learn this term",
-      body: "WATnow didn't find any courses for this term in your Learn account. If Learn lists your courses, select Try again.",
+      title: `No courses on ${lms()} this term`,
+      body: `WATnow didn't find any courses for this term in your ${lms()} account. If ${lms()} lists your courses, select Try again.`,
       action: `<button class="btn btn-primary" data-act="retry">Try again</button>`,
     },
     empty: {
       mark: icon("check", 24),
-      title: "No deadlines on Learn yet",
+      title: `No deadlines on ${lms()} yet`,
       body: "Your courses are there, but none of them have dated items yet. When a prof posts something with a due date, it shows up here.",
       action: "",
     },
     deleted: {
       mark: icon("check", 24),
       title: "Your data is deleted",
-      body: "WATnow removed your deadlines and settings from this computer. It reads Learn again only when you ask it to.",
-      action: `<button class="btn btn-primary" data-act="retry">Read Learn again</button>`,
+      body: `WATnow removed your deadlines and settings from this computer. It reads ${lms()} again only when you ask it to.`,
+      action: `<button class="btn btn-primary" data-act="retry">Read ${lms()} again</button>`,
     },
   };
   const v = views[kind];
   app.innerHTML = `<section class="state"><div class="state-mark${v.late ? " is-late" : ""}">${v.mark}</div><h1>${esc(v.title)}</h1><p>${esc(v.body)}</p>${v.action}</section>`;
+}
+
+/** Signed out of a school the student may have picked by mistake: a way back to the picker. */
+function changeSchoolHTML() {
+  const school = settings && settings.mode === "live" ? currentSchool(settings) : null;
+  if (!school) return "";
+  return `<p class="pick-change">Not at ${esc(school.name)}? <button class="link-btn" data-act="change-school">Choose a different school</button></p>`;
 }
 
 function errorKind() {
@@ -553,6 +716,11 @@ function closeSettings() {
 }
 
 function route() {
+  if (PREVIEW === "school" || needsSchool()) {
+    setView("school");
+    renderSchoolPicker();
+    return;
+  }
   if (PREVIEW) {
     setView("state");
     renderStateView(PREVIEW);
@@ -576,6 +744,7 @@ function route() {
 function onState(next) {
   const prev = state;
   state = next;
+  if (needsSchool()) return;
   if (view === "settings") {
     if (next.deletedAt && next.scan.status === "idle") {
       setView("deleted");
@@ -666,9 +835,15 @@ app.addEventListener("click", (e) => {
     case "retry":
       send("panel:rescan");
       break;
+    case "pick-school":
+      pickSchool();
+      break;
+    case "change-school":
+      setSettings({ school: null });
+      break;
     case "open-learn":
       chrome.tabs.create({
-        url: settings && settings.mode === "live" ? `${liveBase(settings)}/d2l/home` : `${(settings && settings.learnBase) || "https://learn.uwaterloo.ca"}/d2l/home/`,
+        url: settings && settings.mode === "live" ? (currentSchool(settings) ? homeUrl(currentSchool(settings)) : `${liveBase(settings)}/d2l/home`) : `${(settings && settings.learnBase) || "https://learn.uwaterloo.ca"}/d2l/home/`,
       });
       break;
   }
@@ -682,6 +857,7 @@ bar.addEventListener("click", (e) => {
   const t = e.target.closest("[data-act]");
   if (!t) return;
   if (t.dataset.act === "refresh") send("panel:refresh");
+  if (t.dataset.act === "cm-connect") connectCrowdmark();
   if (t.dataset.act === "settings") (view === "settings" ? closeSettings() : openSettings());
   if (t.dataset.act === "back") closeSettings();
 });
@@ -704,8 +880,14 @@ document.addEventListener("keydown", (e) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.state) onState(changes.state.newValue || emptyState());
   if (area === "local" && changes.settings && changes.settings.newValue) {
+    const before = settings;
     settings = changes.settings.newValue;
     applyTheme(settings.theme);
+    // Picking a school (or going back to the picker) swaps the whole panel.
+    if (before && (before.school || null) !== (settings.school || null) && view !== "settings") {
+      route();
+      if (!needsSchool()) send("panel:opened");
+    }
   }
 });
 
@@ -725,12 +907,16 @@ setInterval(() => {
   state = await getState();
   lastSeq = state.seq || 0;
   await document.fonts.ready.catch(() => {});
+  cmAllowed = PREVIEW ? false : await crowdmarkAllowed(settings);
   route();
   if (!PREVIEW) pingPanelOpen();
-  if (!PREVIEW && (state.scan.status === "idle" || state.scan.status === "running") && !state.deletedAt) send("panel:opened");
+  if (!PREVIEW && !needsSchool() && (state.scan.status === "idle" || state.scan.status === "running") && !state.deletedAt) send("panel:opened");
   // The last check couldn't read Learn: try again now that the student is looking.
   if (!PREVIEW && state.scan.status === "done" && state.stale) send("panel:check");
 })();
+
+chrome.permissions.onAdded.addListener(refreshCm);
+chrome.permissions.onRemoved.addListener(refreshCm);
 
 window.addEventListener("online", () => {
   if (PREVIEW) return;

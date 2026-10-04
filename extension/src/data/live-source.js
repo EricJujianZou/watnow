@@ -116,6 +116,8 @@
   ------------------------------------------------------------------------
 */
 
+import { currentSchool } from "../core/schools.js";
+
 export const LEARN_BASE = "https://learn.uwaterloo.ca";
 
 const FALLBACK_VERSIONS = { lp: "1.30", le: "1.60" };
@@ -127,8 +129,9 @@ const ACTIVITY_KIND = { 3: "dropbox", 4: "quiz", 5: "discussion", 6: "discussion
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * The Learn origin LIVE mode reads. settings.liveBaseOverride exists only so the
- * local test mock can stand in for Learn, and only localhost addresses are accepted.
+ * The Brightspace origin LIVE mode reads: the picked school's (see core/schools.js),
+ * or Waterloo's before a school is picked. settings.liveBaseOverride exists only so
+ * the local test mock can stand in for Learn, and only localhost addresses are accepted.
  */
 export function liveBase(settings) {
   const o = settings && settings.liveBaseOverride;
@@ -140,7 +143,8 @@ export function liveBase(settings) {
       /* ignore a bad override */
     }
   }
-  return LEARN_BASE;
+  const school = currentSchool(settings);
+  return school ? school.origin : LEARN_BASE;
 }
 
 /* ------------------------------------------------------------------ */
@@ -164,9 +168,13 @@ export function termRange(code) {
 
 const SEASON_MONTH = { winter: 1, spring: 5, summer: 5, fall: 9, autumn: 9 };
 
-export function termFromText(text) {
+/**
+ * uwCodes: read Waterloo term codes (1269). Off for other schools, whose four
+ * digit course numbers (Guelph MATH*1155) would read as a past term.
+ */
+export function termFromText(text, uwCodes = true) {
   const s = String(text || "");
-  const code = s.match(/(?:^|[^0-9])(1\d\d[159])(?![0-9])/);
+  const code = uwCodes && s.match(/(?:^|[^0-9])(1\d\d[159])(?![0-9])/);
   if (code) return Number(code[1]);
   const words = s.match(/\b(winter|spring|summer|fall|autumn)\s*[_ ]?\s*(20\d\d)\b/i);
   if (words) return (Number(words[2]) - 1900) * 10 + SEASON_MONTH[words[1].toLowerCase()];
@@ -175,7 +183,7 @@ export function termFromText(text) {
 
 const DASHES = "\\-:\\u2013\\u2014";
 const COURSE_RE = new RegExp(
-  `^\\s*([A-Z]{2,8})\\s*[_ ]?\\s*(\\d{3}[A-Z]{0,2})\\b((?:\\s*/\\s*[A-Z]{2,8}\\s*\\d{3}[A-Z]{0,2})*)\\s*[${DASHES}]?\\s*(.*)$`,
+  `^\\s*([A-Z]{2,8})\\s*[_ *]?\\s*(\\d{3,4}[A-Z]{0,2})\\b((?:\\s*/\\s*[A-Z]{2,8}\\s*\\d{3,4}[A-Z]{0,2})*)\\s*[${DASHES}]?\\s*(.*)$`,
   "i"
 );
 const TERM_TAIL_RE = new RegExp(
@@ -197,7 +205,7 @@ export function parseCourseName(rawName, rawCode) {
     name = name.replace(new RegExp(`^[${DASHES}\\s]+|[${DASHES}\\s]+$`, "g"), "");
     return { code: `${m[1].toUpperCase()} ${m[2].toUpperCase()}`, name };
   }
-  const c = String(rawCode || "").match(/^\s*([A-Z]{2,8})\s*[_ -]?\s*(\d{3}[A-Z]{0,2})(?![0-9])/i);
+  const c = String(rawCode || "").match(/^\s*([A-Z]{2,8})\s*[_ *-]?\s*(\d{3,4}[A-Z]{0,2})(?![0-9])/i);
   if (c) return { code: `${c[1].toUpperCase()} ${c[2].toUpperCase()}`, name: raw };
   // Not a course (co-op community, workshops): a short chip label, the full name as name.
   const full = raw || String(rawCode || "Course").replace(/_/g, " ").trim();
@@ -773,7 +781,8 @@ export class LiveSource {
       if (access.CanAccess === false || access.IsActive === false) continue;
       const typeId = ou.Type && ou.Type.Id;
       if (typeId != null && Number(typeId) !== 3) continue;
-      const term = termFromText(ou.Code) || termFromText(ou.Name);
+      const uw = !currentSchool(this.settings) || currentSchool(this.settings).id === "uwaterloo";
+      const term = termFromText(ou.Code, uw) || termFromText(ou.Name, uw);
       const start = Date.parse(access.StartDate || "");
       const end = Date.parse(access.EndDate || "");
       let inDates = null;
