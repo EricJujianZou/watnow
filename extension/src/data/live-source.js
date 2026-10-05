@@ -78,6 +78,10 @@
 
   6. Quizzes and discussions (for items the myItems feed misses)
      GET /d2l/api/le/{le}/{orgUnitId}/quizzes/          DueDate or EndDate (UW sets only EndDate), StartDate
+     GET /d2l/api/le/{le}/{orgUnitId}/quizzes/{quizId}/attempts/?userId={whoami.Identifier}
+       ObjectListPage of QuizAttemptData. Any attempt with Completed set means
+       submitted, even with attempts remaining or unpublished feedback. If
+       Learn refuses this route, keep using the content completions feed.
      GET /d2l/api/le/{le}/{orgUnitId}/discussions/forums/
      GET /d2l/api/le/{le}/{orgUnitId}/discussions/forums/{forumId}/topics/
        DueDate, then UnlockEndDate, then the older EndDate. UnlockStartDate is opensAt.
@@ -305,6 +309,7 @@ export function queryForReport(path) {
   const out = {};
   for (const [k, v] of new URLSearchParams(path.slice(i + 1))) {
     if (/orgunitids/i.test(k)) out[k] = `<${v.split(",").filter(Boolean).length} ids>`;
+    else if (k === "userId") out[k] = "<redacted>";
     else if (k === "bookmark") out[k] = v.length > 24 ? `${v.slice(0, 24)}...` : v;
     else out[k] = v.slice(0, 40);
   }
@@ -557,6 +562,7 @@ export class LiveSource {
     this.relay = opts.relay || null;
     this.now = opts.now || new Date();
     this.versions = null;
+    this.userId = null;
     this.via = "worker";
     this.lastAt = 0;
     this.feed = null;
@@ -678,11 +684,11 @@ export class LiveSource {
     return r.json;
   }
 
-  async paged(path) {
+  async paged(path, opts = {}) {
     const out = [];
     let next = path;
     for (let i = 0; i < 25 && next; i++) {
-      const page = await this.api(next);
+      const page = await this.api(next, opts);
       out.push(...listOf(page));
       const info = page && page.PagingInfo;
       if (info && info.HasMoreItems && info.Bookmark) {
@@ -724,6 +730,7 @@ export class LiveSource {
     try {
       const me = await this.api(`/d2l/api/lp/${lp}/users/whoami`, { via });
       if (!me || typeof me !== "object" || (!me.Identifier && !me.UniqueName && !me.FirstName)) return { signedIn: false, why: "odd-whoami" };
+      this.userId = me.Identifier != null && NUMERIC_ID.test(String(me.Identifier)) ? String(me.Identifier) : null;
       const first = String(me.FirstName || "").trim();
       const last = String(me.LastName || "").trim();
       const initials = `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
@@ -1308,6 +1315,24 @@ export class LiveSource {
     this.readOk.set(course.id, okSources);
     rep.readOk = [...okSources];
     const items = dropEchoes([...new Set(byKey.values())]);
+    // Content completion can lag until all allowed attempts are used. Check
+    // actual submissions for quizzes from every source, including the calendar.
+    rep.quizAttemptsPartial = 0;
+    for (const item of items) {
+      if (item.kind !== "quiz" || item.status === "submitted") continue;
+      const quizId = toolIdFromUrl("quiz", item.url) || (item.srcs.has("tool") ? item.id.split(":").slice(2).join(":") : null);
+      if (!quizId || !NUMERIC_ID.test(quizId)) continue;
+      try {
+        const state = await this.quizSubmissionState(le, ou, quizId);
+        if (state.submitted) {
+          item.status = "submitted";
+          item.completedAt = state.at;
+        }
+      } catch (e) {
+        if (e.code === "signed-out") throw e;
+        rep.quizAttemptsPartial++;
+      }
+    }
     for (const i of items) {
       i.seenIn = [...i.seen];
       delete i.srcs;
@@ -1318,6 +1343,25 @@ export class LiveSource {
     rep.items = items.length;
     rep.submitted = items.filter((i) => i.status === "submitted").length;
     return items;
+  }
+
+  /**
+   * A submitted attempt counts even if retakes remain. Read only the signed-in
+   * student's attempts, and require Completed rather than a grade or feedback.
+   */
+  async quizSubmissionState(le, ou, quizId, via = this.via) {
+    if (!this.userId) await this.whoami(via);
+    if (!this.userId) {
+      const err = new Error("Learn did not identify the student for the quiz attempt check.");
+      err.code = "no-user";
+      throw err;
+    }
+    const attempts = await this.paged(`/d2l/api/le/${le}/${ou}/quizzes/${quizId}/attempts/?userId=${this.userId}`, { via });
+    const dates = attempts
+      .filter((a) => a && String(a.UserId) === this.userId && String(a.QuizId) === String(quizId))
+      .map((a) => isoOrNull(a.Completed))
+      .filter(Boolean);
+    return dates.length ? { submitted: true, at: dates.sort().pop() } : { submitted: false };
   }
 
   /**
@@ -1346,6 +1390,7 @@ export class LiveSource {
     const sourceId = rest.join(":");
     if (!ou || !/^\d+$/.test(sourceId) || (kind !== "dropbox" && kind !== "quiz")) return null;
     const vias = this.relay ? ["worker", "tab"] : ["worker"];
+    let checked = false;
     for (const via of vias) {
       try {
         const { le } = await this.ensureVersions(via);
@@ -1357,26 +1402,37 @@ export class LiveSource {
           }
           return dates.length ? { submitted: true, at: dates.sort().pop() } : { submitted: false };
         }
-        // Quizzes: Learn's completions feed for this one course.
+        // Try submitted attempts first. The content feed can miss a quiz whose
+        // student still has attempts left, or whose feedback is not published.
+        try {
+          const state = await this.quizSubmissionState(le, ou, sourceId, via);
+          if (state.submitted) return state;
+          checked = true;
+        } catch (e) {
+          this.report.notes.push(`quiz attempts via ${via} failed (${e.code || "error"})`);
+        }
+        // Keep the feed as a fallback for Learn roles without attempts access.
         const { from } = this.window();
         const q = new URLSearchParams({ orgUnitIdsCSV: String(ou), completedFromDateTime: from, completedToDateTime: utcDateTime(Date.now() + DAY_MS) });
-        const rows = [];
         for (const route of ["completions/due/", "completions/"]) {
-          const page = await this.api(`/d2l/api/le/${le}/content/myItems/${route}?${q}`, { via });
-          rows.push(...listOf(page));
+          try {
+            const rows = await this.paged(`/d2l/api/le/${le}/content/myItems/${route}?${q}`, { via });
+            checked = true;
+            const hit = rows.find((x) => {
+              if (!x || Number(x.OrgUnitId) !== ou || kindOf(x) !== "quiz") return false;
+              const id = toolIdFromUrl("quiz", absolute(this.base, x.ItemUrl));
+              return id ? id === sourceId : norm(x.ItemName) === norm(item.title);
+            });
+            if (hit) return { submitted: true, at: isoOrNull(hit.DateCompleted) || isoOrNull(hit.CompletionDate) || new Date().toISOString() };
+          } catch (e) {
+            this.report.notes.push(`quiz ${route} via ${via} failed (${e.code || "error"})`);
+          }
         }
-        const hit = rows.find((x) => {
-          if (!x || Number(x.OrgUnitId) !== ou) return false;
-          const id = toolIdFromUrl("quiz", absolute(this.base, x.ItemUrl));
-          return id ? id === sourceId : norm(x.ItemName) === norm(item.title);
-        });
-        if (!hit) return { submitted: false };
-        return { submitted: true, at: isoOrNull(hit.DateCompleted) || isoOrNull(hit.CompletionDate) || new Date().toISOString() };
       } catch (e) {
         this.report.notes.push(`submission check via ${via} failed (${e.code || "error"})`);
       }
     }
-    return null;
+    return checked ? { submitted: false } : null;
   }
 
   /** Called by the background once a sync ends. */

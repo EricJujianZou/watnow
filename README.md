@@ -80,6 +80,8 @@ This section is for developers. Most people should use the Chrome Web Store link
 
 `extension/` is the same build that goes to the Chrome Web Store: it reads live Learn only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
 
+Run the regression tests with Node.js 22 or later using `npm test`. They use mocked Learn responses and need no dependencies or Learn login. Quiz attempt access still needs verification in a signed-in Learn student session.
+
 ---
 
 WATnow is not affiliated with or endorsed by D2L or the University of Waterloo.
