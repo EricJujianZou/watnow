@@ -11,7 +11,9 @@
       "id": "watnow@ugmi.ca",
       "strict_min_version": "128.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     }
   },
@@ -43,7 +45,9 @@
   "options_page": "options/options.html",
   "background": {
     "service_worker": "src/background.js",
-    "scripts": ["src/background.js"],
+    "scripts": [
+      "src/background.js"
+    ],
     "type": "module"
   },
   "permissions": [
@@ -51,7 +55,8 @@
     "storage",
     "notifications",
     "alarms",
-    "scripting"
+    "scripting",
+    "identity"
   ],
   "host_permissions": [
     "https://learn.uwaterloo.ca/*"
@@ -64,7 +69,9 @@
     "https://westernu.brightspace.com/*",
     "https://courses.torontomu.ca/*",
     "https://courses.ryerson.ca/*",
-    "https://app.crowdmark.com/*"
+    "https://app.crowdmark.com/*",
+    "https://www.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
   ],
   "content_scripts": [
     {
