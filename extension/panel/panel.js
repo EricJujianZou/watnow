@@ -1,5 +1,6 @@
 import { getState, getSettings, setSettings, getFilter, setFilter, emptyState, getCalendarState, emptyCalendarState } from "../src/core/store.js";
-import { updateCalendarView, wireCalendarControls } from "../src/ui/calendar-view.js";
+import { updateCalendarView, wireCalendarControls, showCalendarConsent } from "../src/ui/calendar-view.js";
+import { googleConfigured } from "../src/calendar/config.js";
 import { buildModel } from "../src/core/model.js";
 import { fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
 import { icon, brandMark, esc, CATEGORY_ICON } from "../src/ui/icons.js";
@@ -81,7 +82,7 @@ function renderBar() {
     PREVIEW || (scan !== "done" && !busy)
       ? ""
       : `<button class="icon-btn" data-act="refresh" aria-label="${busy ? `Reading ${lms()}` : `Check ${lms()} for changes`}" ${busy ? "disabled" : ""}>${icon("refresh", 20, busy ? "spin" : "")}</button>`;
-  // The refresh spinner carries the read status when integration icons show.
+  // The refresh spinner carries the read status when connection controls show.
   const cmBtn = cmButtonHTML(scan);
   const calendarBtn = calendarButtonHTML(scan);
   if (cmBtn || calendarBtn) status = "";
@@ -96,28 +97,19 @@ function renderBar() {
   if (focused) bar.querySelector(`[data-act="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
-/** Keep names and connection states available on hover and keyboard focus. */
-function integrationButton(action, name, label, status = "", busy = false) {
-  return `<button class="icon-btn integration-btn${status ? ` is-${status}` : ""}" data-act="${action}" aria-label="${esc(label)}" ${busy ? 'aria-disabled="true" aria-busy="true"' : ""}>
-    ${icon(name)}
-    ${status ? '<span class="integration-dot" aria-hidden="true"></span>' : ""}
-    <span class="integration-tip" aria-hidden="true">${esc(label)}</span>
-  </button>`;
-}
-
 function calendarButtonHTML(scan) {
-  if (PREVIEW || scan !== "done" || settings?.mode !== "live") return "";
+  if (!googleConfigured() || PREVIEW || scan !== "done" || settings?.mode !== "live" || (calendar.dismissed && !calendar.enabled)) return "";
   const connected = calendar.enabled && calendar.account?.email;
   const busy = calendar.status === "connecting" || calendar.status === "syncing";
   const issue = calendar.error || calendar.status === "reconnect" || calendar.status === "error";
-  const status = busy ? "connecting" : issue ? "attention" : calendar.enabled ? "connected" : "";
   const label = connected ? `Open Google Calendar${busy ? " · Syncing" : issue ? " · Needs attention" : ""}` : calendar.status === "connecting" ? "Google Calendar · Connecting" : issue ? "Google Calendar · Needs attention" : "Google Calendar · Connect";
-  return integrationButton("calendar", "calendar", label, status);
+  return `<button class="icon-btn" data-act="calendar" aria-label="${esc(label)}" title="${esc(label)}">${icon("calendar")}</button>`;
 }
 
 /** Open the selected Google account; connection controls stay in Settings. */
 function openCalendar() {
-  if (!calendar.enabled || !calendar.account?.email) return openSettings();
+  if (!googleConfigured()) return;
+  if (!calendar.enabled || !calendar.account?.email) return showCalendarConsent();
   const url = new URL("https://calendar.google.com/calendar/");
   // Account order can change, so use the connected email instead of /u/0/.
   url.searchParams.set("authuser", calendar.account.email);
@@ -139,12 +131,12 @@ function cmConnecting() {
   return true;
 }
 
-/** Waterloo only. A connected icon opens Crowdmark; otherwise it connects. */
+/** Left of refresh: yellow Connect until Crowdmark reads, then a quiet Connected label. Waterloo only for now. */
 function cmButtonHTML(scan) {
   if (PREVIEW || scan !== "done" || !settings || settings.mode !== "live" || settings.school !== "uwaterloo") return "";
-  if (cmConnecting()) return integrationButton("cm-connect", "crowdmark", "Crowdmark · Connecting", "connecting", true);
-  if (cmAllowed && !cmDown()) return integrationButton("cm-open", "crowdmark", "Crowdmark · Connected", "connected");
-  return integrationButton("cm-connect", "crowdmark", cmDown() ? "Crowdmark · Reconnect" : "Crowdmark · Connect", cmDown() ? "attention" : "");
+  if (cmConnecting()) return `<span class="btn btn-primary btn-sm cm-btn is-connecting" role="status">${icon("refresh", 16, "spin")}Connecting…</span>`;
+  if (cmAllowed && !cmDown()) return `<span class="btn btn-quiet btn-sm cm-btn is-connected">Crowdmark Connected</span>`;
+  return `<button class="btn btn-primary btn-sm cm-btn" data-act="cm-connect">Connect Crowdmark</button>`;
 }
 
 async function refreshCm() {
@@ -893,7 +885,6 @@ bar.addEventListener("click", (e) => {
   if (!t || t.getAttribute("aria-disabled") === "true") return;
   if (t.dataset.act === "refresh") send("panel:refresh");
   if (t.dataset.act === "cm-connect") connectCrowdmark();
-  if (t.dataset.act === "cm-open") chrome.tabs.create({ url: `${crowdmarkBase(settings)}/student/courses` });
   if (t.dataset.act === "calendar") openCalendar();
   if (t.dataset.act === "settings") (view === "settings" ? closeSettings() : openSettings());
   if (t.dataset.act === "back") closeSettings();

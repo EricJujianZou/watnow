@@ -2,6 +2,7 @@
 
 import { getSettings, setSettings, getCalendarState } from "../core/store.js";
 import { calendarSettingsHTML, wireCalendarControls } from "./calendar-view.js";
+import { googleConfigured } from "../calendar/config.js";
 import { TESTER_BUILD } from "../core/build.js";
 import { LEADS, REMINDER_TYPES } from "../core/reminders.js";
 import { icon, esc } from "./icons.js";
@@ -81,7 +82,6 @@ function template(s, courses, context, calendar) {
   return `
   <div class="settings">
     ${context === "panel" && !TESTER_BUILD ? sourceSection(s) : ""}
-    <section class="set-section" aria-labelledby="set-calendar" data-calendar-settings>${calendarSettingsHTML(calendar)}</section>
     <section class="set-section" aria-labelledby="set-rem">
       <h2 id="set-rem">Reminders</h2>
       <h3>Deadline type</h3>
@@ -94,6 +94,8 @@ function template(s, courses, context, calendar) {
       <div data-bg-tip></div>
     </section>
 
+    ${googleConfigured() ? `<section class="set-section" aria-labelledby="set-calendar" data-calendar-settings>${calendarSettingsHTML(calendar)}</section>` : ""}
+
     <section class="set-section" aria-labelledby="set-look">
       <h2 id="set-look">Appearance</h2>
       <div class="seg" role="radiogroup" aria-labelledby="set-look">
@@ -103,7 +105,7 @@ function template(s, courses, context, calendar) {
 
     <section class="set-section" aria-labelledby="set-data">
       <h2 id="set-data">My data</h2>
-      <p class="note" style="margin-top:6px">${icon("lock", 18)}<span>WATnow reads Learn with the session that's already signed in on this browser, so it never sees your password. Deadlines and settings are saved on this computer. If you connect Google Calendar, deadline details are also sent to your chosen Google account.</span></p>
+      <p class="note" style="margin-top:6px">${icon("lock", 18)}<span>WATnow reads Learn with the session that's already signed in on this browser, so it never sees your password. Your deadlines and settings stay on this computer.${googleConfigured() ? " If you connect Google Calendar, deadline details are also sent to your chosen Google account." : ""}</span></p>
       <div style="margin-top:16px" data-delete-area>
         <button class="btn btn-danger btn-sm" data-act="ask-delete">Delete my data</button>
       </div>
@@ -212,15 +214,18 @@ export async function mountSettings(root, { courses = [], context = "panel", onD
 
     const area = root.querySelector("[data-delete-area]");
     switch (t.dataset.act) {
-      case "ask-delete":
+      case "ask-delete": {
+        const calendar = await getCalendarState();
+        const hasCalendar = calendar.enabled || Object.keys(calendar.accounts).length > 0;
         area.innerHTML = `<div class="confirm" role="group" aria-label="Confirm delete">
-          <p>This deletes everything WATnow saved on this computer, including the items you checked off, and disconnects Google Calendar. Existing Google Calendar events remain.</p>
+          <p>This deletes everything WATnow saved on this computer, including the items you checked off.${hasCalendar ? " This also disconnects Google Calendar. Existing Google Calendar events remain." : ""}</p>
           <div class="row-actions">
             <button class="btn btn-danger-solid btn-sm" data-act="confirm-delete">Delete</button>
             <button class="btn btn-quiet btn-sm" data-act="cancel-delete">Keep my data</button>
           </div></div>`;
         area.querySelector('[data-act="cancel-delete"]').focus();
         break;
+      }
       case "cancel-delete":
         area.innerHTML = `<button class="btn btn-danger btn-sm" data-act="ask-delete">Delete my data</button>`;
         area.querySelector("button").focus();

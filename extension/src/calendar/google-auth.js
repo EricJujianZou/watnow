@@ -1,8 +1,7 @@
-// Native tokens belong to Chrome; web-flow tokens stay only in worker memory.
+// Chrome owns token caching and renewal, independently of worker lifetime.
 // Never save tokens or authorization URLs in local storage or debug reports.
-import { GOOGLE_SCOPES, GOOGLE_WEB_CLIENT_ID, googleConfigured } from "./config.js";
+import { GOOGLE_SCOPES, googleConfigured } from "./config.js";
 
-let webToken = null;
 let authEpoch = 0;
 let interactiveAuth = false;
 
@@ -22,10 +21,27 @@ function browserErrorDetail(error) {
     .replace(/\s+/g, " ").trim().slice(0, 400);
 }
 
+/** Details are for developers; students get a short, actionable message. */
+export function configurationError(detail) {
+  console.warn("Google Calendar configuration:", browserErrorDetail(detail));
+  return calendarError("configuration", "Google Calendar couldn't connect. Try again later.");
+}
+
+export function calendarMessage(error) {
+  if (["configuration", "auth", "network", "token", "api", "ownership", "setup", "calendar-missing", "cancelled"].includes(error?.code)) return error.message;
+  console.warn("Google Calendar:", browserErrorDetail(error));
+  return "Google Calendar couldn't connect. Try again later.";
+}
+
 /** Translate known errors; keep a sanitized Chrome reason for unknown ones. */
 function authorizationError(error, interactive) {
-  if (!interactive) return calendarError("auth", "Reconnect Google Calendar to continue syncing.");
   const message = String(typeof error === "string" ? error : error?.message || "").toLowerCase();
+  if (message.includes("invalid oauth2 client id")) return configurationError("Invalid OAuth client ID");
+  if (message.includes("invalid oauth2 scopes")) return configurationError("Invalid OAuth scopes");
+  if (/network|connection failed|service unavailable|temporarily unavailable|service error/.test(message)) {
+    return calendarError("network", "Couldn't reach Google. We'll try again.", true);
+  }
+  if (!interactive) return calendarError("auth", "Reconnect Google Calendar to continue syncing.");
   if (message.includes("only one web auth flow") || message.includes("auth flow is already")) {
     return calendarError("auth", "A Google sign-in window is already open. Finish or close it before trying again. If you can't find it, reload WATnow in chrome://extensions.");
   }
@@ -38,36 +54,17 @@ function authorizationError(error, interactive) {
     return calendarError("auth", "Google sign-in was closed or access wasn't approved. Select Connect and finish Google's sign-in steps.");
   }
   if (message.includes("authorization page could not be loaded")) {
-    return calendarError("auth", "Chrome couldn't load Google's sign-in page. Check your connection and try again. If Google displays an error, copy its error details.");
+    return calendarError("auth", "Chrome couldn't load Google's sign-in page. Check your connection and try again.");
   }
   if (message.includes("did not redirect to the right url")) {
-    return calendarError("auth", "Google didn't return to WATnow. Check that the Web client's redirect URI matches this extension's ID and ends in /google.");
+    return configurationError("Google did not return to the registered redirect URI");
   }
   if (message.includes("incognito")) return calendarError("auth", "Connect Google Calendar from a regular Chrome window.");
   if (message.includes("not signed in") || message.includes("browser signin") || message.includes("interaction required")) {
     return calendarError("auth", "Chrome needs you to sign in before connecting Google Calendar.");
   }
-  if (message.includes("invalid oauth2 client id")) return calendarError("configuration", "Google rejected this build's OAuth client ID. Check the client configuration.");
-  if (message.includes("invalid oauth2 scopes")) return calendarError("configuration", "Google rejected the requested permissions. Check the OAuth scope configuration.");
-  return calendarError("auth", `Google sign-in couldn't start or finish. Chrome reported: ${browserErrorDetail(error)}`);
-}
-
-function consentError(code, interactive) {
-  if (!interactive) return calendarError("auth", "Reconnect Google Calendar to continue syncing.");
-  const messages = {
-    access_denied: "Google denied access. Approve the requested permissions and check that this account is an OAuth test user.",
-    admin_policy_enforced: "Your Google account administrator blocked access to WATnow.",
-    org_internal: "This Google app only allows accounts in its organization. Check the OAuth audience setting.",
-    redirect_uri_mismatch: "Google rejected the redirect address. Register this extension's exact redirect URI on the Web client.",
-    invalid_client: "Google rejected the OAuth client. Check this build's Web client ID.",
-    invalid_scope: "Google rejected the requested permissions. Check the OAuth scope configuration.",
-    temporarily_unavailable: "Google sign-in is temporarily unavailable. Try again shortly.",
-    server_error: "Google couldn't finish sign-in. Try again shortly.",
-    interaction_required: "Google needs you to sign in and approve access. Select Connect to try again.",
-    login_required: "Sign in to Google, then select Connect again.",
-    consent_required: "Google needs permission to sync your deadlines. Select Connect and approve access.",
-  };
-  return calendarError("auth", Object.hasOwn(messages, code) ? messages[code] : "Google returned an authorization error. Check the Google window's error details.");
+  console.warn("Google Calendar sign-in:", browserErrorDetail(error));
+  return calendarError("auth", "Google Calendar couldn't connect. Try again later.");
 }
 
 async function identify(token) {
@@ -75,6 +72,8 @@ async function identify(token) {
   try {
     res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
       headers: { Authorization: `Bearer ${token}` },
+      credentials: "omit",
+      mode: "cors",
       signal: AbortSignal.timeout(20000),
     });
   } catch {
@@ -82,7 +81,7 @@ async function identify(token) {
   }
   if (res.status === 401) {
     await invalidateGoogleToken(token);
-    throw calendarError("auth", "Reconnect Google Calendar to continue syncing.");
+    throw calendarError("token", "Google authorization expired. Retrying shortly.", true);
   }
   if (!res.ok) throw calendarError("network", "Google couldn't confirm the account. Try again.", true);
   const user = await res.json();
@@ -91,112 +90,82 @@ async function identify(token) {
 }
 
 async function authorize({ interactive, account }) {
-  if (!googleConfigured()) throw calendarError("configuration", "Google Calendar isn't configured in this build yet. See the local setup instructions.");
-  let result;
-  try {
-    result = await chrome.identity.getAuthToken({
-      interactive,
-      enableGranularPermissions: true,
-      scopes: GOOGLE_SCOPES,
-      ...(account ? { account: { id: account.id } } : {}),
-    });
-  } catch (e) {
-    throw authorizationError(e, interactive);
-  }
-  if (!result.token || !GOOGLE_SCOPES.every((s) => result.grantedScopes?.includes(s))) {
-    if (result.token) await chrome.identity.removeCachedAuthToken({ token: result.token });
-    throw calendarError("auth", "Allow the requested Google Calendar permissions to sync deadlines.");
-  }
-  const selected = await identify(result.token);
-  if (account && selected.id !== account.id) throw calendarError("auth", "Google returned a different account. Reconnect to choose where your deadlines go.");
-  return { token: result.token, account: selected };
-}
-
-/** Web OAuth can explicitly request account selection; getAuthToken cannot.
- * Silent renewal is pinned to the verified Google subject, never the default
- * browser account. If Google needs interaction, sync waits for Reconnect. */
-async function authorizeWeb({ interactive, account }) {
-  if (!GOOGLE_WEB_CLIENT_ID) throw calendarError("configuration", "Account switching needs a Web OAuth client configured for this build.");
+  if (!googleConfigured()) throw configurationError("Missing Chrome Extension OAuth client ID");
   const epoch = authEpoch;
-  const state = crypto.randomUUID();
-  const redirect = chrome.identity.getRedirectURL("google");
-  const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  url.search = new URLSearchParams({
-    client_id: GOOGLE_WEB_CLIENT_ID,
-    redirect_uri: redirect,
-    response_type: "token",
-    scope: GOOGLE_SCOPES.join(" "),
-    state,
-    prompt: interactive ? "select_account" : "none",
-    ...(account ? { login_hint: account.id } : {}),
-  }).toString();
-  let response;
-  try {
-    response = await chrome.identity.launchWebAuthFlow({ url: url.href, interactive });
-  } catch (e) {
-    if (epoch !== authEpoch) throw calendarError("cancelled", "Connection cancelled.");
-    throw authorizationError(e, interactive);
+  const checkCurrent = async (token) => {
+    if (epoch === authEpoch) return;
+    if (token) await invalidateGoogleToken(token).catch(() => {});
+    throw calendarError("cancelled", "Connection cancelled.");
+  };
+  // A rejected cached token gets one fresh attempt. Repeating consent windows
+  // is never part of a retry, even when the first request was interactive.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let result;
+    try {
+      result = await chrome.identity.getAuthToken({
+        interactive: interactive && attempt === 0,
+        enableGranularPermissions: true,
+        scopes: GOOGLE_SCOPES,
+        ...(account ? { account: { id: account.id } } : {}),
+      });
+    } catch (e) {
+      await checkCurrent();
+      throw authorizationError(e, interactive && attempt === 0);
+    }
+    await checkCurrent(result?.token);
+    const granted = new Set(result?.grantedScopes || []);
+    if (granted.has("email")) granted.add("https://www.googleapis.com/auth/userinfo.email");
+    if (!result?.token || !GOOGLE_SCOPES.every((s) => granted.has(s))) {
+      if (result?.token) await invalidateGoogleToken(result.token);
+      throw calendarError("auth", "Allow the requested Google Calendar permissions to sync deadlines.");
+    }
+    let selected;
+    try {
+      selected = await identify(result.token);
+    } catch (e) {
+      await checkCurrent(result.token);
+      if (e.code === "token" && attempt === 0) continue;
+      throw e;
+    }
+    await checkCurrent(result.token);
+    if (account && selected.id !== account.id) {
+      await invalidateGoogleToken(result.token);
+      throw calendarError("auth", "The connected Google account isn't available in Chrome. Sign into that account in Chrome and reconnect, or disconnect Calendar first to use another account.");
+    }
+    return { token: result.token, account: { ...selected, auth: "chrome" } };
   }
-  if (epoch !== authEpoch) throw calendarError("cancelled", "Connection cancelled.");
-  let returned;
-  try { returned = new URL(response); } catch {
-    throw calendarError("auth", "Google didn't finish connecting. Try again.");
-  }
-  const expected = new URL(redirect);
-  const params = new URLSearchParams(returned.hash.slice(1));
-  if (returned.origin !== expected.origin || returned.pathname !== expected.pathname || returned.search || params.get("state") !== state) {
-    throw calendarError("auth", "Google's response couldn't be verified. Try connecting again.");
-  }
-  if (params.has("error")) throw consentError(params.get("error"), interactive);
-  const token = params.get("access_token");
-  const scopes = new Set((params.get("scope") || "").split(/\s+/));
-  // Google can return the equivalent OpenID email scope for userinfo.email.
-  if (scopes.has("email")) scopes.add("https://www.googleapis.com/auth/userinfo.email");
-  const seconds = Number(params.get("expires_in"));
-  if (!token || params.get("token_type")?.toLowerCase() !== "bearer" || !Number.isFinite(seconds) || seconds <= 0) {
-    throw calendarError("auth", "Google didn't return a valid authorization. Reconnect to try again.");
-  }
-  if (!GOOGLE_SCOPES.every((s) => scopes.has(s))) throw calendarError("auth", "Allow the requested Google Calendar permissions to sync deadlines.");
-  const selected = await identify(token);
-  if (epoch !== authEpoch) throw calendarError("cancelled", "Connection cancelled.");
-  if (account && selected.id !== account.id) throw calendarError("auth", "Google returned a different account. Reconnect to choose where your deadlines go.");
-  webToken = { token, accountId: selected.id, expiresAt: Date.now() + seconds * 1000 - 60000 };
-  return { token, account: { ...selected, auth: "web" } };
 }
 
-/** Called only after a Connect / Change account click. */
-export async function connectGoogle() {
-  if (!googleConfigured()) throw calendarError("configuration", "Google Calendar isn't configured in this build yet. See the local setup instructions.");
+/** Only an explicit Connect click may ask Chrome to show sign-in or consent.
+ * Reconnect stays pinned to the saved account. Disconnect first to use Chrome's
+ * current default account. Clearing all tokens is reserved for Disconnect. */
+export async function connectGoogle(account = null) {
+  if (!googleConfigured()) throw configurationError("Missing Chrome Extension OAuth client ID");
   if (interactiveAuth) throw calendarError("auth", "A Google sign-in window is still open. Finish or close it before trying again.");
   interactiveAuth = true;
   authEpoch++;
-  webToken = null;
   try {
-    if (GOOGLE_WEB_CLIENT_ID) return await authorizeWeb({ interactive: true });
-    // Legacy Chrome clients use the profile's account; clearing the cache does
-    // not force an account picker. Change account is gated before reaching here.
-    await chrome.identity.clearAllCachedAuthTokens();
-    return await authorize({ interactive: true });
+    return await authorize({ interactive: true, account });
   } finally {
     interactiveAuth = false;
   }
 }
 
 export async function getGoogleToken(account) {
+  if (!account?.id) throw calendarError("auth", "Reconnect Google Calendar to continue syncing.");
+  // Web grants do not migrate implicitly to a different OAuth client. Keep
+  // calendar IDs and event records, but require one explicit native reconnect.
   if (account.auth === "web") {
-    if (webToken?.accountId === account.id && webToken.expiresAt > Date.now()) return webToken.token;
-    return (await authorizeWeb({ interactive: false, account })).token;
+    throw calendarError("auth", "Reconnect Google Calendar once to use Chrome's connection.");
   }
   return (await authorize({ interactive: false, account })).token;
 }
 
 export async function invalidateGoogleToken(token) {
-  if (webToken?.token === token) webToken = null;
   await chrome.identity.removeCachedAuthToken({ token });
 }
 
 export async function disconnectGoogle() {
   authEpoch++;
-  webToken = null;
   await chrome.identity.clearAllCachedAuthTokens();
 }

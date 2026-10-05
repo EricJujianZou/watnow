@@ -28,33 +28,60 @@ export function eventFingerprint(event) {
   return JSON.stringify(event);
 }
 
+/** Keep actual read results with the state they produced. The local list
+ * treats disconnected Crowdmark as empty; that isn't evidence of deletion. */
+export function calendarReadStatus(result, at) {
+  const courses = Object.fromEntries([...result.readOk]
+    .filter(([id]) => !result.failed.has(id))
+    .map(([id, sources]) => [id, [...sources].filter((source) => source !== "crowdmark" || result.crowdmark.status === "ok")]));
+  return { at, courses };
+}
+
+/** Removal needs a current course and a complete read of every source that
+ * supplied the item. Missing courses, failed reads and old records are kept. */
+function canRemove(state, courses, record) {
+  const read = state.calendarRead;
+  const ok = read?.courses?.[record.courseId];
+  return state.scan?.status === "done" && !state.syncing && !state.stale &&
+    read?.at === state.lastSyncAt && courses.has(record.courseId) &&
+    record.key && record.seenIn?.length && Array.isArray(ok) && record.seenIn.every((source) => ok.includes(source));
+}
+
 /** Existing events keep receiving updates, including completed/overdue work.
- * Only new events are limited to upcoming, open deadlines. An item that's no
- * longer in state (deleted on the course site) gets its event removed. */
+ * Only new events are limited to upcoming, open deadlines. Source removals
+ * can return; Google deletions stay deleted. Records use a stable logical ID,
+ * while each republish gets a new Google ID to avoid Google's tombstones. */
 export async function calendarPlan(state, school, records, now = Date.now()) {
   const courses = new Map(state.courses.map((c) => [c.id, c]));
   const plan = [];
   const liveIds = new Set();
   for (const item of state.items) {
-    const course = courses.get(item.courseId);
-    if (!course || !Number.isFinite(Date.parse(item.dueAt))) continue;
     const key = deadlineKey(school, item);
     const id = await eventIdFor(key);
     liveIds.add(id);
+    const course = courses.get(item.courseId);
+    if (!course || !Number.isFinite(Date.parse(item.dueAt))) continue;
     const previous = records[id];
     if (previous?.deleted) continue;
+    if (previous?.removing) {
+      // Finish an interrupted removal before recreating the event, even if
+      // the item came back while the delete response was in flight.
+      if (canRemove(state, courses, previous)) plan.push({ id, remove: true, record: previous });
+      continue;
+    }
     if (!previous && (item.status !== "open" || Date.parse(item.dueAt) <= now)) continue;
+    const incarnation = (previous?.incarnation || 0) + (previous?.removed ? 1 : 0);
+    const eventId = incarnation ? await eventIdFor(`${key}:republished:${incarnation}`) : id;
+    const metadata = { school, courseId: item.courseId, seenIn: item.seenIn || [], key, eventId, incarnation };
     const event = deadlineToEvent(item, course, key);
     const fingerprint = eventFingerprint(event);
-    if (previous?.fingerprint !== fingerprint) plan.push({ id, event, fingerprint });
+    if (previous?.removed || previous?.fingerprint !== fingerprint || previous?.courseId !== item.courseId || JSON.stringify(previous?.seenIn) !== JSON.stringify(metadata.seenIn)) {
+      plan.push({ id, eventId, event, fingerprint, metadata });
+    }
   }
-  // An item that drops out of state (deleted on the course site) no longer
-  // has a record of its own school to re-derive, so each record remembers
-  // the school it was synced under. Records from before that tagging existed
-  // have no school on file and are left alone rather than guessed at.
   for (const [id, record] of Object.entries(records)) {
-    if (record.deleted || record.school !== school || liveIds.has(id)) continue;
-    plan.push({ id, remove: true });
+    if (record.deleted || record.removed || record.school !== school || liveIds.has(id)) continue;
+    if (canRemove(state, courses, record)) plan.push({ id, remove: true, record });
   }
   return plan;
 }

@@ -12,6 +12,8 @@ export function calendarApi(token, guard = async () => {}) {
     try {
       res = await fetch(BASE + path, {
         method,
+        mode: "cors",
+        credentials: "omit",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(20000),
@@ -38,18 +40,6 @@ export function calendarApi(token, guard = async () => {}) {
   }
 
   return {
-    async findCalendar() {
-      let pageToken = "";
-      do {
-        const q = new URLSearchParams({ maxResults: "250", showHidden: "true" });
-        if (pageToken) q.set("pageToken", pageToken);
-        const page = await request(`/users/me/calendarList?${q}`);
-        const found = (page.items || []).find((c) => c.accessRole === "owner" && c.description === CALENDAR_MARKER);
-        if (found) return found.id;
-        pageToken = page.nextPageToken;
-      } while (pageToken);
-      return null;
-    },
     createCalendar: () => request("/calendars", { method: "POST", body: { summary: CALENDAR_NAME, description: CALENDAR_MARKER } }),
     getCalendar: (id) => request(`/calendars/${part(id)}`),
     getEvent: (id, eventId) => request(`/calendars/${part(id)}/events/${part(eventId)}`),

@@ -13,8 +13,8 @@ import { plannedReminders, reminderCopy, movedCopy, unsubmittedCopy, canConfirm 
 import { pingInstall, pingDayActive } from "./core/usage.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
-import { updateCalendarState } from "./core/store.js";
 import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, recoverCalendarSync, stopCalendarSync } from "./calendar/calendar-sync.js";
+import { calendarReadStatus } from "./calendar/event-model.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -611,6 +611,7 @@ async function runLiveScan(settings, epoch) {
       s.student = result.session.student || null;
       s.scan.courses = s.scan.courses.filter((p) => ids.has(p.courseId) || p.courseId === CROWDMARK_ROW);
       s.items = items;
+      s.calendarRead = calendarReadStatus(result, nowIso());
       s.crowdmark = crowdmarkState(s.crowdmark, result.crowdmark.status);
       delete s.carry;
       if (firstRead) skipPastReminders(s, latest);
@@ -619,7 +620,7 @@ async function runLiveScan(settings, epoch) {
       s.errorKind = null;
       s.scan.status = "done";
       s.scan.finishedAt = nowIso();
-      s.lastSyncAt = nowIso();
+      s.lastSyncAt = s.calendarRead.at;
       s.seq += 1;
       s.lastEvent = { type: "scan-done", seq: s.seq, at: nowIso() };
     });
@@ -732,13 +733,14 @@ async function runLiveSync({ fromPanel = false } = {}) {
       s.courses = result.courses;
       s.student = result.session.student || s.student || null;
       s.items = merged.items;
+      s.calendarRead = calendarReadStatus(result, nowIso());
       s.crowdmark = crowdmarkState(s.crowdmark, result.crowdmark.status);
       s.syncing = false;
       s.error = null;
       s.errorKind = null;
       s.stale = null;
       s.scan.status = "done";
-      s.lastSyncAt = nowIso();
+      s.lastSyncAt = s.calendarRead.at;
       if (moved.length) {
         s.seq += 1;
         s.lastEvent = { type: "moved", itemId: moved[moved.length - 1].item.id, seq: s.seq, at: nowIso() };
@@ -1255,7 +1257,7 @@ async function handle(msg, sender) {
     if (msg.type === "calendar:connect") return connectCalendar();
     if (msg.type === "calendar:change-account") return connectCalendar({ changeAccount: true });
     if (msg.type === "calendar:disconnect") await stopCalendarSync({ disconnect: true });
-    else if (msg.type === "calendar:dismiss") await updateCalendarState((s) => { s.dismissed = true; });
+    else if (msg.type === "calendar:dismiss") await stopCalendarSync({ disconnect: true });
     else if (msg.type === "calendar:sync") await requestCalendarSync();
     else return { ok: false, reason: "Unknown calendar action." };
     return { ok: true };

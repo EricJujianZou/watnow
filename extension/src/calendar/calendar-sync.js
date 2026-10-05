@@ -1,8 +1,8 @@
 import { getCalendarState, updateCalendarState, getSettings, getState } from "../core/store.js";
-import { connectGoogle, getGoogleToken, disconnectGoogle, calendarError } from "./google-auth.js";
+import { connectGoogle, getGoogleToken, disconnectGoogle, calendarError, configurationError, calendarMessage } from "./google-auth.js";
 import { calendarApi } from "./google-api.js";
 import { calendarPlan } from "./event-model.js";
-import { GOOGLE_WEB_CLIENT_ID } from "./config.js";
+import { CALENDAR_MARKER, googleConfigured } from "./config.js";
 
 export const CALENDAR_ALARM = "google-calendar-sync";
 let running = null;
@@ -10,9 +10,10 @@ let running = null;
 /** An insert may have reached Google even if its response never reached us.
  * Look up the deterministic ID before inserting, and recover a 409 as well. */
 export async function reconcileEvent(api, calendarId, change) {
+  const eventId = change.eventId || change.id;
   let existing;
   try {
-    existing = await api.getEvent(calendarId, change.id);
+    existing = await api.getEvent(calendarId, eventId);
   } catch (e) {
     if (e.status === 410) return { deleted: true };
     if (e.status !== 404) throw e;
@@ -20,37 +21,54 @@ export async function reconcileEvent(api, calendarId, change) {
   if (existing?.status === "cancelled") return { deleted: true };
   if (!existing) {
     try {
-      await api.insertEvent(calendarId, { id: change.id, ...change.event });
+      await api.insertEvent(calendarId, { id: eventId, ...change.event });
       return { fingerprint: change.fingerprint };
     } catch (e) {
       if (e.status !== 409) throw e;
-      existing = await api.getEvent(calendarId, change.id);
+      try {
+        existing = await api.getEvent(calendarId, eventId);
+      } catch (e) {
+        if (e.status === 410) return { deleted: true };
+        throw e;
+      }
       if (existing.status === "cancelled") return { deleted: true };
     }
   }
   if (existing.extendedProperties?.private?.watnowKey !== change.event.extendedProperties.private.watnowKey) {
     throw calendarError("ownership", "An event couldn't be identified as a WATnow deadline. Sync is paused.");
   }
-  await api.patchEvent(calendarId, change.id, change.event);
+  await api.patchEvent(calendarId, eventId, change.event);
   return { fingerprint: change.fingerprint };
 }
 
 /** Deletes an event whose item disappeared from state. Checked out the same
  * way as an update: only a WATnow-tagged event is removed. Already-gone is
  * treated as success, not an error to retry. */
-export async function removeEvent(api, calendarId, id) {
+export async function removeEvent(api, calendarId, change, markRemoving) {
+  const record = change.record;
+  const eventId = record.eventId || change.id;
+  const gone = () => record.removing ? { removed: true } : { deleted: true };
   let existing;
   try {
-    existing = await api.getEvent(calendarId, id);
+    existing = await api.getEvent(calendarId, eventId);
   } catch (e) {
-    if (e.status === 404 || e.status === 410) return;
+    if (e.status === 404) return { removed: true };
+    if (e.status === 410) return gone();
     throw e;
   }
-  if (existing.status === "cancelled") return;
-  if (existing.extendedProperties?.private?.watnow !== "1") {
+  if (existing.status === "cancelled") return gone();
+  if (!record.key || existing.extendedProperties?.private?.watnow !== "1" || existing.extendedProperties.private.watnowKey !== record.key) {
     throw calendarError("ownership", "An event couldn't be identified as a WATnow deadline. Sync is paused.");
   }
-  await api.deleteEvent(calendarId, id);
+  // Save intent before DELETE: a lost response must not turn our own removal
+  // into a permanent Google-deletion tombstone after the worker restarts.
+  await markRemoving();
+  try {
+    await api.deleteEvent(calendarId, eventId);
+  } catch (e) {
+    if (e.status !== 404 && e.status !== 410) throw e;
+  }
+  return { removed: true };
 }
 
 export async function scheduleCalendarRetry(minutes = 1) {
@@ -58,6 +76,7 @@ export async function scheduleCalendarRetry(minutes = 1) {
 }
 
 export async function requestCalendarSync() {
+  if (!googleConfigured()) return;
   const c = await updateCalendarState((s) => {
     if (!s.enabled) return false;
     s.pending = true;
@@ -94,11 +113,12 @@ export async function recoverCalendarSync() {
   if (c.enabled && !["connecting", "reconnect", "error"].includes(c.status)) await requestCalendarSync();
 }
 
-/** The old destination is paused before account selection begins. Cancelling
+/** The old destination is paused before authorization begins. Cancelling
  * cannot silently resume writes to an account the user meant to replace. */
 export async function connectCalendar({ changeAccount = false } = {}) {
-  if (changeAccount && !GOOGLE_WEB_CLIENT_ID) {
-    return { ok: false, reason: "Account switching needs a Web OAuth client configured for this build. Your current connection is unchanged." };
+  if (!googleConfigured()) return { ok: false, reason: configurationError("Missing OAuth client ID").message };
+  if (changeAccount) {
+    return { ok: false, reason: "Disconnect Calendar first, then connect using the Google account available in Chrome." };
   }
   const before = await getCalendarState();
   if (before.status === "connecting") return { ok: false, reason: "Google account selection is already open." };
@@ -111,17 +131,18 @@ export async function connectCalendar({ changeAccount = false } = {}) {
   });
   await chrome.alarms.clear(CALENDAR_ALARM);
   try {
-    const { account } = await connectGoogle();
+    const { account } = await connectGoogle(before.account);
     const c = await updateCalendarState((s) => {
       if (s.generation !== start.generation) return false;
       s.account = account;
       s.accounts[account.id] ||= { calendarId: null, events: {} };
       if (s.accounts[account.id].missing) s.accounts[account.id] = { calendarId: null, events: {} };
-      // An explicit reconnect permits another setup attempt, after searching
-      // Google for an already-created calendar first.
+      // Only an explicit reconnect permits another creation attempt after an
+      // uncertain response. Background retries must not create duplicates.
       delete s.accounts[account.id].creatingAt;
       s.enabled = true;
-      s.dismissed = true;
+      // Explicitly opting in from Settings brings the shortcut back.
+      s.dismissed = false;
       s.status = "ready";
       s.lastSyncAt = null;
       s.attempts = 0;
@@ -130,12 +151,13 @@ export async function connectCalendar({ changeAccount = false } = {}) {
     await requestCalendarSync();
     return { ok: true };
   } catch (e) {
+    const message = calendarMessage(e);
     await updateCalendarState((s) => {
       if (s.generation !== start.generation) return false;
       s.status = "off";
-      s.error = e.message;
+      s.error = message;
     });
-    return { ok: false, reason: e.message };
+    return { ok: false, reason: message };
   }
 }
 
@@ -163,6 +185,7 @@ export function runCalendarSync() {
 }
 
 async function runCalendarSyncNow() {
+  if (!googleConfigured()) return;
   const c = await getCalendarState();
   if (!c.enabled || !c.account || !c.pending || ["connecting", "reconnect", "error"].includes(c.status)) return;
   const settings = await getSettings();
@@ -193,23 +216,20 @@ async function runCalendarSyncNow() {
     const record = c.accounts[accountId];
     let calendarId = record.calendarId;
     if (!calendarId) {
-      calendarId = await api.findCalendar();
-      if (!calendarId) {
-        if (record.creatingAt) {
-          const recent = Date.now() - Date.parse(record.creatingAt) < 120000;
-          throw calendarError("setup", "Calendar creation wasn't confirmed. Check Google Calendar, then reconnect to retry setup.", recent);
-        }
-        await save((_s, r) => { r.creatingAt = new Date().toISOString(); });
-        const created = await api.createCalendar();
-        if (!created.id) throw calendarError("setup", "Calendar creation wasn't confirmed. Reconnect to check again.");
-        calendarId = created.id;
+      if (record.creatingAt) {
+        throw calendarError("setup", "Calendar setup was interrupted. Check Google Calendar before reconnecting; reconnecting may create another WATNOW calendar.");
       }
+      await save((_s, r) => { r.creatingAt = new Date().toISOString(); });
+      const created = await api.createCalendar();
+      if (!created.id) throw calendarError("setup", "Calendar setup was interrupted. Check Google Calendar before reconnecting; reconnecting may create another WATNOW calendar.");
+      calendarId = created.id;
       await guard();
       await save((_s, r) => { r.calendarId = calendarId; delete r.creatingAt; });
     }
     // A missing calendar must never turn into hundreds of attempted inserts.
     try {
-      await api.getCalendar(calendarId);
+      const destination = await api.getCalendar(calendarId);
+      if (destination.description !== CALENDAR_MARKER) throw calendarError("ownership", "This calendar couldn't be identified as WATnow's. Sync is paused.");
     } catch (e) {
       if (e.status !== 404 && e.status !== 410) throw e;
       await save((_s, r) => { r.missing = true; });
@@ -222,19 +242,25 @@ async function runCalendarSyncNow() {
       if (done >= 20 || Date.now() - started > 25000) break;
       await guard();
       if (change.remove) {
-        await removeEvent(api, calendarId, change.id);
+        const result = await removeEvent(api, calendarId, change, async () => {
+          await guard();
+          await save((_s, r) => { r.events[change.id] = { ...change.record, removing: true }; });
+        });
         await guard();
-        await save((_s, r) => { r.events[change.id] = { deleted: true }; });
+        await save((_s, r) => {
+          const { removing, fingerprint, ...metadata } = change.record;
+          r.events[change.id] = { ...metadata, ...result };
+        });
       } else {
         const result = await reconcileEvent(api, calendarId, change);
         await guard();
-        await save((_s, r) => { r.events[change.id] = { ...result, school: settings.school }; });
+        await save((_s, r) => { r.events[change.id] = { ...change.metadata, ...result }; });
       }
       done++;
     }
     await guard();
     const next = await save((s) => {
-      s.pending = done < plan.length || s.revision !== c.revision;
+      s.pending = done < plan.length || s.revision !== c.revision || plan.some((change) => change.remove);
       s.status = s.pending ? "queued" : "ready";
       s.attempts = 0;
       if (!s.pending) s.lastSyncAt = new Date().toISOString();
@@ -256,7 +282,7 @@ async function runCalendarSyncNow() {
       s.attempts++;
       const retry = e.retry && !(e.code === "token" && s.attempts >= 3);
       s.status = retry ? "queued" : ["auth", "token"].includes(e.code) ? "reconnect" : "error";
-      s.error = e.message || "Calendar sync couldn't finish. Try again.";
+      s.error = calendarMessage(e);
       s.pending = true;
     });
     if (next.generation !== generation) return;
