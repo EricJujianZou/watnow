@@ -415,6 +415,9 @@ const ENTITY_KIND = {
   ModuleCO: null,
   DiscussionForum: null,
   GradeObject: null,
+  // A course checklist ("Read the Course Outline"): a to-do list with suggested
+  // dates, not a deadline, and Learn doesn't tell students what they ticked.
+  ChecklistItem: null,
 };
 // Calendar EventType (LE API 1.94+): 1 Reminder, 2 AvailabilityStarts, 3 AvailabilityEnds, 4 UnlockStarts, 5 UnlockEnds, 6 DueDate.
 const EVENT_TYPE = { 1: "reminder", 2: "opens", 3: "ends", 4: "opens", 5: "ends", 6: "due" };
