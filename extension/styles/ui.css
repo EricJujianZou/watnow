@@ -1,5 +1,24 @@
 /* Shared base and components for the side panel and the settings page. Load after tokens.css. */
 
+.calendar-details {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.calendar-details summary {
+  cursor: pointer;
+}
+
+.calendar-actions,
+.calendar-fine {
+  margin-top: 16px;
+}
+
+.calendar-status,
+[data-calendar-settings] strong {
+  overflow-wrap: anywhere;
+}
+
 *,
 *::before,
 *::after {

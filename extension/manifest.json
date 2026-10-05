@@ -33,7 +33,8 @@
     "storage",
     "notifications",
     "alarms",
-    "scripting"
+    "scripting",
+    "identity"
   ],
   "host_permissions": [
     "https://learn.uwaterloo.ca/*"

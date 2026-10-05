@@ -26,6 +26,7 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 - WATnow rereads your course site every 30 minutes while Chrome is open. When a prof pushes a due date, the item shows the new date highlighted with the old one crossed out underneath, so you never have to go back and correct a calendar by hand.
 - Assignments, labs, quizzes and discussions each get their own reminder lead time, anywhere from seven days before the due date to the morning it's due. Reminders stop once your course site shows you submitted, or once you tick the item off yourself.
 - Waterloo students can connect Crowdmark too, and its assignments show up in the same list under the matching course.
+- Connect [Google Calendar](extension/src/calendar/README.md) to keep a separate WATNOW calendar updated with your deadlines.
 - The panel still works when your course site is down or your laptop is offline. It keeps showing the list it last read and keeps your reminders, then tries again at the next check.
 
 ## What it looks like
@@ -72,6 +73,7 @@ This repo is public so you can read exactly what the extension does with your sc
 - It only sends GET requests: to your school's `/d2l/api/`, to a quiz's summary page to see whether you've completed it, and to Crowdmark's student API if you connect it. It can't change anything on either site.
 - Chrome asks you before WATnow can read any school other than Waterloo, or Crowdmark.
 - Your courses, deadlines and settings are saved in your browser's extension storage on your own computer.
+- If you connect Google Calendar, WATnow shares course and deadline details with Google. See [what the connection shares and saves](extension/src/calendar/README.md#permissions--scopes).
 - The only thing it sends anywhere is an anonymous count: once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from your courses. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
 
 The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
@@ -81,6 +83,8 @@ The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 This section is for developers. Most people should use the Chrome Web Store link above, which also keeps the extension updated.
 
 `extension/` is the same build that goes to the Chrome Web Store: it reads live course sites only, and the demo fixtures used for recording videos are stripped out. Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
+
+For Google Calendar setup, account access and developer notes, see the [Google Calendar README](extension/src/calendar/README.md).
 
 ---
 

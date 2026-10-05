@@ -111,6 +111,70 @@ body {
   }
 }
 
+.calendar-bar-btn {
+  position: relative;
+}
+
+.calendar-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--done);
+  box-shadow: 0 0 0 2px var(--sheet);
+}
+
+.calendar-dot.is-attention {
+  background: var(--late);
+}
+
+.calendar-dot.is-connecting {
+  background: var(--accent-press);
+}
+
+.calendar-optin-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  backdrop-filter: blur(2px);
+}
+
+.calendar-optin-card {
+  background: var(--sheet);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  max-width: 320px;
+  box-shadow: var(--clay-md);
+}
+
+.calendar-optin-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-bold);
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+
+.calendar-optin-desc {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+  line-height: var(--leading-normal);
+  margin: 0 0 16px;
+}
+
+.calendar-optin-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .bar-status {
   display: inline-flex;
   align-items: center;

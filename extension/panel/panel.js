@@ -1,4 +1,6 @@
-import { getState, getSettings, setSettings, getFilter, setFilter, emptyState } from "../src/core/store.js";
+import { getState, getSettings, setSettings, getFilter, setFilter, emptyState, getCalendarState, emptyCalendarState } from "../src/core/store.js";
+import { googleConfigured } from "../src/calendar/config.js";
+import { updateCalendarView, wireCalendarControls } from "../src/ui/calendar-view.js";
 import { buildModel } from "../src/core/model.js";
 import { fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
 import { icon, brandMark, esc, CATEGORY_ICON } from "../src/ui/icons.js";
@@ -20,6 +22,7 @@ const announcer = document.getElementById("announce");
 
 let state = emptyState();
 let settings = null;
+let calendar = emptyCalendarState();
 let filter = "all";
 let view = "";
 let lastSeq = 0;
@@ -62,6 +65,54 @@ function announce(text) {
 /* Top bar                                                             */
 /* ------------------------------------------------------------------ */
 
+function calendarButtonHTML(scan) {
+  if (PREVIEW || scan !== "done" || settings?.mode !== "live" || !googleConfigured()) return "";
+  if (calendar.dismissed && !calendar.enabled) return "";
+  const connected = calendar.enabled && calendar.account?.email;
+  const busy = calendar.status === "connecting" || calendar.status === "syncing";
+  const issue = calendar.error || calendar.status === "reconnect" || calendar.status === "error";
+  const label = connected
+    ? `Open Google Calendar${busy ? " · Syncing" : issue ? " · Needs attention" : ""}`
+    : busy
+    ? "Google Calendar · Connecting"
+    : issue
+    ? "Google Calendar · Needs attention"
+    : "Sync deadlines to Google Calendar";
+  const dot = busy
+    ? '<span class="calendar-dot is-connecting" aria-hidden="true"></span>'
+    : issue
+    ? '<span class="calendar-dot is-attention" aria-hidden="true"></span>'
+    : connected
+    ? '<span class="calendar-dot is-connected" aria-hidden="true"></span>'
+    : "";
+  return `<button class="icon-btn calendar-bar-btn" data-act="calendar" aria-label="${esc(label)}">${icon("calendar", 20)}${dot}</button>`;
+}
+
+function openCalendar() {
+  if (!calendar.enabled || !calendar.account?.email) return openSettings();
+  const url = new URL("https://calendar.google.com/calendar/");
+  url.searchParams.set("authuser", calendar.account.email);
+  chrome.tabs.create({ url: url.href });
+}
+
+function showCalendarOptIn() {
+  if (document.getElementById("calendar-optin")) return;
+  const overlay = document.createElement("div");
+  overlay.id = "calendar-optin";
+  overlay.className = "calendar-optin-backdrop";
+  overlay.innerHTML = `
+    <div class="calendar-optin-card" role="dialog" aria-labelledby="cal-optin-title">
+      <h3 id="cal-optin-title" class="calendar-optin-title">Sync deadlines to Google Calendar?</h3>
+      <p class="calendar-optin-desc">WATnow adds your deadlines to a separate WATNOW calendar and updates them when dates change. Google receives course names, deadline titles, dates and links.</p>
+      <div class="calendar-optin-actions">
+        <button class="btn btn-quiet btn-sm" data-calendar-optin="dismiss">Don't sync</button>
+        <button class="btn btn-primary btn-sm" data-calendar-optin="connect">Connect Google Calendar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-calendar-optin="connect"]')?.focus();
+}
+
 function renderBar() {
   if (view === "settings") {
     bar.innerHTML = `<button class="icon-btn" data-act="back" aria-label="Back to deadlines">${icon("back")}</button><h1 class="bar-title">Settings</h1><span class="spacer"></span>`;
@@ -79,12 +130,14 @@ function renderBar() {
       : `<button class="icon-btn" data-act="refresh" aria-label="${busy ? `Reading ${lms()}` : `Check ${lms()} for changes`}" ${busy ? "disabled" : ""}>${icon("refresh", 20, busy ? "spin" : "")}</button>`;
   // The bar can't fit both the Crowdmark button and the status pill at side panel widths; the spinning refresh still shows a check is running.
   const cmBtn = cmButtonHTML(scan);
-  if (cmBtn) status = "";
+  const calendarBtn = calendarButtonHTML(scan);
+  if (cmBtn || calendarBtn) status = "";
   bar.innerHTML = `
     <div class="brand"><span class="mark-tile">${brandMark(24)}</span><span class="brand-name">${esc(APP)}</span></div>
     <span class="spacer"></span>
     ${status}
     ${cmBtn}
+    ${calendarBtn}
     ${refresh}
     <button class="icon-btn" data-act="settings" aria-label="Reminders and settings">${icon("gear")}</button>`;
 }
@@ -858,8 +911,25 @@ bar.addEventListener("click", (e) => {
   if (!t) return;
   if (t.dataset.act === "refresh") send("panel:refresh");
   if (t.dataset.act === "cm-connect") connectCrowdmark();
+  if (t.dataset.act === "calendar") {
+    if (calendar.enabled && calendar.account?.email) openCalendar();
+    else showCalendarOptIn();
+  }
   if (t.dataset.act === "settings") (view === "settings" ? closeSettings() : openSettings());
   if (t.dataset.act === "back") closeSettings();
+});
+
+document.body.addEventListener("click", async (e) => {
+  const optinBtn = e.target.closest("[data-calendar-optin]");
+  if (optinBtn) {
+    const act = optinBtn.dataset.calendarOptin;
+    document.getElementById("calendar-optin")?.remove();
+    if (act === "dismiss") {
+      await chrome.runtime.sendMessage({ type: "calendar:dismiss" });
+    } else if (act === "connect") {
+      await chrome.runtime.sendMessage({ type: "calendar:connect" });
+    }
+  }
 });
 
 // Hidden demo shortcuts. Chrome's own commands (manifest "commands") fire too;
@@ -878,6 +948,11 @@ document.addEventListener("keydown", (e) => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.calendar) {
+    calendar = changes.calendar.newValue || emptyCalendarState();
+    updateCalendarView(app, calendar);
+    renderBar();
+  }
   if (area === "local" && changes.state) onState(changes.state.newValue || emptyState());
   if (area === "local" && changes.settings && changes.settings.newValue) {
     const before = settings;
@@ -901,6 +976,8 @@ setInterval(() => {
 
 (async function init() {
   settings = await getSettings();
+  calendar = await getCalendarState();
+  wireCalendarControls(app);
   applyTheme(settings.theme);
   document.title = APP;
   filter = await getFilter();
