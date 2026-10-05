@@ -12,6 +12,8 @@ import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
 import { plannedReminders, reminderCopy, movedCopy, unsubmittedCopy, canConfirm } from "./core/reminders.js";
 import { pingInstall, pingDayActive } from "./core/usage.js";
 import { IS_GECKO, HAS_SIDE_PANEL, HAS_SIDEBAR } from "./core/env.js";
+import { buildEvents, planSync, tombstones, CALENDAR_NAME } from "./calendar/events.js";
+import { toIcs, icsFilename } from "./calendar/ics.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
 
@@ -1039,6 +1041,37 @@ async function submissionCheck(settings, item) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Calendar                                                            */
+/* ------------------------------------------------------------------ */
+
+const CALENDAR_INDEX = "calendarIndex";
+
+/**
+ * The deadlines as one calendar file.
+ *
+ * The index of what was last written lives here rather than in the page, so
+ * SEQUENCE keeps going up across exports and a second import changes the
+ * events already in the calendar instead of adding another set. A deadline
+ * that has gone is written out as cancelled for a while, so re-importing
+ * clears it too.
+ */
+async function buildCalendarFile() {
+  const s = await getState();
+  const now = new Date();
+  const events = buildEvents(s.items, s.courses);
+  const { [CALENDAR_INDEX]: saved } = await chrome.storage.local.get(CALENDAR_INDEX);
+  const plan = planSync(saved || {}, events, now);
+  const cancelled = tombstones(plan.index, now);
+  const ics = toIcs(events, { seqOf: plan.index, cancelled, now, name: CALENDAR_NAME });
+  await chrome.storage.local.set({ [CALENDAR_INDEX]: plan.index });
+  return {
+    ics,
+    filename: icsFilename(now),
+    counts: { events: events.length, added: plan.creates.length, changed: plan.updates.length, removed: cancelled.length },
+  };
+}
+
 /** Asks Learn or Crowdmark, whichever the item lives on. */
 function askSubmitted(settings, item) {
   return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item, crowdmarkRelay) : submissionCheck(settings, item);
@@ -1415,6 +1448,10 @@ async function handle(msg, sender) {
       // lands on is one the background can read through.
       await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
       return { ok: true, status: await readCrowdmarkOnly() };
+    case "calendar:export": {
+      const file = await buildCalendarFile();
+      return { ok: true, ...file };
+    }
     case "crowdmark:page": {
       // The bridge is on a Crowdmark page, so a read that looked signed out
       // now has a tab to run through. onUpdated above covers the same ground,

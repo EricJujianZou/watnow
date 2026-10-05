@@ -109,6 +109,15 @@ function template(s, courses, context) {
       </div>
     </section>
 
+    <section class="set-section" aria-labelledby="set-cal">
+      <h2 id="set-cal">Calendar</h2>
+      <p class="set-help">Put your deadlines in Google Calendar, Apple Calendar, Outlook or anything else that reads calendar files. Importing the file again later moves the dates that changed rather than making a second copy of everything.</p>
+      <div class="row-actions" style="margin-top:14px">
+        <button class="btn btn-primary btn-sm" data-act="cal-export">Export my deadlines</button>
+      </div>
+      <p class="status-text" data-cal-status role="status"></p>
+    </section>
+
     <section class="set-section" aria-labelledby="set-data">
       <h2 id="set-data">My data</h2>
       <p class="note" style="margin-top:6px">${icon("lock", 18)}<span>WATnow reads Learn with the session that's already signed in on this browser, so it never sees your password. Your deadlines and settings stay on this computer.</span></p>
@@ -118,6 +127,27 @@ function template(s, courses, context) {
       ${context === "panel" ? `<p style="margin:18px 0 0"><button class="link-btn" data-act="open-options">${esc(DEBUG_LINK)}</button></p>` : ""}
     </section>
   </div>`;
+}
+
+/**
+ * Hands the file to the browser's downloads.
+ *
+ * A link with download on it needs no permission, which a downloads API call
+ * would. The object URL is let go on the next turn of the loop, once the click
+ * has been taken.
+ */
+function saveIcs(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 0);
 }
 
 export async function mountSettings(root, { courses = [], context = "panel", onDeleted } = {}) {
@@ -173,6 +203,25 @@ export async function mountSettings(root, { courses = [], context = "panel", onD
   root.addEventListener("click", async (e) => {
     const t = e.target.closest("[data-course], [data-type-toggle], [data-act]");
     if (!t) return;
+
+    if (t.dataset.act === "cal-export") {
+      const status = root.querySelector("[data-cal-status]");
+      t.disabled = true;
+      status.textContent = "Building your calendar file…";
+      const res = await chrome.runtime.sendMessage({ type: "calendar:export" }).catch(() => null);
+      t.disabled = false;
+      if (!res || !res.ok || !res.ics) {
+        status.textContent = "That didn't work. Try again once WATnow has read your deadlines.";
+        return;
+      }
+      if (!res.counts.events) {
+        status.textContent = "There are no dated deadlines to export yet.";
+        return;
+      }
+      saveIcs(res.ics, res.filename);
+      status.textContent = `${res.counts.events} ${res.counts.events === 1 ? "deadline" : "deadlines"} saved as ${res.filename}. Import it into your calendar.`;
+      return;
+    }
 
     if (t.dataset.typeToggle) {
       const id = t.dataset.typeToggle;
