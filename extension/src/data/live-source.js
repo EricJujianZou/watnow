@@ -579,9 +579,10 @@ export class LiveSource {
     this.base = liveBase(settings);
     this.settings = settings;
     this.relay = opts.relay || null;
-    // Item ids of closed dropbox folders already read once (or confirmed as
-    // submitted). Their history pages aren't read again.
-    this.settled = opts.settled || new Set();
+    // Closed dropbox folders that don't need their history page read this time,
+    // as item id -> the due date they were checked against: confirmed as
+    // submitted, or read in the last day with nothing in them.
+    this.skip = opts.skip || new Map();
     this.now = opts.now || new Date();
     this.versions = null;
     this.via = "worker";
@@ -1089,11 +1090,13 @@ export class LiveSource {
       // has handed something in. Before that the link goes to the list page.
       const isGroup = f.GroupTypeId != null;
       let groupId = null;
-      let settled = false;
-      // A closed folder already read once: Learn would refuse mysubmissions
-      // again and the history page won't change, so skip both.
+      let historyAt = null;
+      // A closed folder checked recently: Learn would refuse mysubmissions again,
+      // so skip it and the history page. A moved due date reads it again.
       const closed = isoOrNull(avail.EndDate) && Date.parse(avail.EndDate) < this.now.getTime();
-      if (!(closed && this.settled.has(`${ou}:dropbox:${f.Id}`))) try {
+      const checkedFor = this.skip.get(`${ou}:dropbox:${f.Id}`);
+      const skip = closed && checkedFor != null && Date.parse(checkedFor) === Date.parse(dueAt);
+      if (!skip) try {
         const subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${f.Id}/submissions/mysubmissions/`));
         const dates = [];
         for (const s of subs) {
@@ -1110,7 +1113,9 @@ export class LiveSource {
         if (e.code === "forbidden") {
           const page = await this.dropboxHistory(ou, f.Id);
           if (page && page.submitted) submittedAt = this.now.toISOString();
-          if (page) settled = true;
+          // Nothing in it yet. An extension can still let the student hand it
+          // in, so it's read again a day later rather than settled.
+          else if (page) historyAt = this.now.toISOString();
         }
       }
       out.push({
@@ -1122,7 +1127,7 @@ export class LiveSource {
         opensAt: laterOnly(isoOrNull(avail.StartDate), dueAt),
         categoryName: catNames[f.CategoryId] || "",
         completedAt: submittedAt,
-        settled,
+        historyAt,
         groupId,
         groupFolder: isGroup,
         exactId: isGroup && groupId == null ? false : undefined,
@@ -1235,6 +1240,9 @@ export class LiveSource {
     if (plain == null) return null;
     // The table's header row, then the first row's submission id.
     if (/Submission ID\s+Submission\(s\)\s+Date Submitted\s+\d{4,}\s/i.test(plain)) return { submitted: true, at: null };
+    // A submissions table in another layout (a group folder with a "Submitted
+    // By" column, say): something may be in it, so it can't count as empty.
+    if (/Submission ID|Date Submitted/i.test(plain)) return null;
     if (/Assignment Type/i.test(plain)) return { submitted: false };
     // Learn changed the page or shows it in another language; stop asking this run.
     this.dropboxPageOff = true;
@@ -1322,7 +1330,7 @@ export class LiveSource {
           seen: new Set([source]),
         };
         if (x.opensAt) item.opensAt = x.opensAt;
-        if (x.settled) item.settled = true;
+        if (x.historyAt) item.historyAt = x.historyAt;
         byKey.set(key, item);
         if (!byTitle.has(tkey)) byTitle.set(tkey, item);
         return;
@@ -1343,7 +1351,7 @@ export class LiveSource {
         found.learnUrl = x.url;
       }
       if (x.opensAt && (!found.opensAt || src === "tool")) found.opensAt = x.opensAt;
-      if (x.settled) found.settled = true;
+      if (x.historyAt) found.historyAt = x.historyAt;
       if (x.completedAt && found.status !== "submitted") {
         found.status = "submitted";
         found.completedAt = x.completedAt;

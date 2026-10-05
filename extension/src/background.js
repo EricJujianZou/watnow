@@ -457,9 +457,9 @@ function mergeLive(prevItems, fresh, { failed, readOk, courseIds }, now = new Da
       item.status = "submitted";
       item.completedAt = p.completedAt;
     }
-    // A settled check is skipped on later reads, so the fresh row doesn't carry
-    // the flag. It stays until the prof moves the date, which can reopen it.
-    if (p.settled && !item.settled && Date.parse(p.dueAt) === Date.parse(f.dueAt)) item.settled = true;
+    // A closed dropbox read recently is skipped, so the fresh row has no
+    // historyAt. Keep the old one, unless the date moved and it's read again.
+    if (p.historyAt && !item.historyAt && item.status !== "submitted" && Date.parse(p.dueAt) === Date.parse(f.dueAt)) item.historyAt = p.historyAt;
     if (Date.parse(p.dueAt) !== Date.parse(f.dueAt)) {
       const fieldChanged = p.dueField && f.dueField && p.dueField !== f.dueField;
       if (!fieldChanged) {
@@ -551,17 +551,19 @@ function restoreAfterFailure(s, carry, kind, error) {
 }
 
 /**
- * Dropbox folders whose answer won't change (confirmed as handed in, or read
- * once after they closed), so a read doesn't open their history pages again.
+ * Closed dropbox folders a read can skip, as item id -> the due date they were
+ * checked against: confirmed as handed in, or read in the last day with nothing
+ * in them (an extension can still let the student hand it in).
  */
-function settledChecks(items) {
-  return new Set((items || []).filter((i) => i.kind === "dropbox" && (i.status === "submitted" || i.settled)).map((i) => i.id));
+function skipChecks(items, now = Date.now()) {
+  const recent = (i) => i.historyAt && now - Date.parse(i.historyAt) < 24 * 60 * 60 * 1000;
+  return new Map((items || []).filter((i) => i.kind === "dropbox" && (i.status === "submitted" || recent(i))).map((i) => [i.id, i.dueAt]));
 }
 
 async function runLiveScan(settings, epoch) {
   const before = await getState();
   const carry = carryOf(before);
-  const source = createSource(settings, getCatalog, { relay: relayFetch, settled: settledChecks(carry.items) });
+  const source = createSource(settings, getCatalog, { relay: relayFetch, skip: skipChecks(carry.items) });
   const firstRead = !carry.lastSyncAt && !carry.items.length;
   await mutate((s) => ({
     ...emptyState(),
@@ -715,7 +717,7 @@ async function runLiveSync({ fromPanel = false } = {}) {
   liveSyncing = true;
   const epoch = modeEpoch;
   const settings = await getSettings();
-  const source = createSource(settings, getCatalog, { relay: relayFetch, settled: settledChecks(s0.items) });
+  const source = createSource(settings, getCatalog, { relay: relayFetch, skip: skipChecks(s0.items) });
   const extra = { run: "sync", fromPanel };
   await mutate((s) => {
     s.syncing = true;
