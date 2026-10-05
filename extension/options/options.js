@@ -4,6 +4,7 @@ import { DEMO_SCRIPT, COURSES, ITEMS } from "../src/data/fixtures.js";
 import { brandMark, esc } from "../src/ui/icons.js";
 import { fmtAgo } from "../src/core/dates.js";
 import { TESTER_BUILD } from "../src/core/build.js";
+import { IS_GECKO } from "../src/core/env.js";
 import { currentSchool } from "../src/core/schools.js";
 import { CROWDMARK_BASE, CROWDMARK_ORIGIN, probeCrowdmark } from "../src/data/crowdmark-probe.js";
 
@@ -124,8 +125,12 @@ async function render() {
             )
             .join("")}
         </ul>
-        <p class="set-help" style="margin-top:14px">If a shortcut is missing or another app already uses it, change it on Chrome's shortcuts page.</p>
-        <button class="btn btn-quiet btn-sm" data-act="shortcuts">Open shortcut settings</button>
+        <p class="set-help" style="margin-top:14px">${
+          IS_GECKO
+            ? "If a shortcut is missing or another app already uses it, change it in Add-ons and themes, under the gear menu, Manage Extension Shortcuts."
+            : "If a shortcut is missing or another app already uses it, change it on Chrome's shortcuts page."
+        }</p>
+        ${IS_GECKO ? "" : '<button class="btn btn-quiet btn-sm" data-act="shortcuts">Open shortcut settings</button>'}
       </section>
 
       <section class="set-section" aria-labelledby="src-h">
@@ -195,7 +200,7 @@ page.addEventListener("click", async (e) => {
     // chrome.permissions.request only works straight from the click, so nothing is awaited before it.
     const ok = await (on ? chrome.permissions.request({ origins: [CROWDMARK_ORIGIN] }) : chrome.permissions.remove({ origins: [CROWDMARK_ORIGIN] })).catch(() => false);
     if (on && !ok) {
-      status.textContent = "Chrome didn't give WATnow access to Crowdmark, so it isn't connected.";
+      status.textContent = "Your browser didn't give WATnow access to Crowdmark, so it isn't connected.";
       return;
     }
     chrome.runtime.sendMessage({ type: "panel:refresh" }).catch(() => {});
@@ -205,10 +210,10 @@ page.addEventListener("click", async (e) => {
   if (t.dataset.act === "cm-probe") {
     const status = page.querySelector("[data-cm-status]");
     const box = page.querySelector("[data-cm-text]");
-    // Chrome only shows the permission prompt from inside the click, so this comes before any other await.
+    // The permission prompt only shows from inside the click, so this comes before any other await.
     const granted = await chrome.permissions.request({ origins: [CROWDMARK_ORIGIN] }).catch(() => false);
     if (!granted) {
-      status.textContent = "Chrome didn't give WATnow access to Crowdmark, so nothing was read.";
+      status.textContent = "Your browser didn't give WATnow access to Crowdmark, so nothing was read.";
       return;
     }
     t.disabled = true;
@@ -230,7 +235,8 @@ page.addEventListener("click", async (e) => {
       status.textContent = `${found} Copying didn't work. The report is selected below, so press Ctrl+C to copy it.`;
     }
   }
-  if (t.dataset.act === "shortcuts") chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
+  // Gecko has no openable shortcuts URL, so that button is not rendered there.
+  if (t.dataset.act === "shortcuts" && !IS_GECKO) chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
   if (t.dataset.act === "copy-debug") {
     const status = page.querySelector("[data-debug-status]");
     const { liveDebug } = await chrome.storage.local.get("liveDebug");

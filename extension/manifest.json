@@ -6,6 +6,17 @@
   "version": "1.2.1",
   "default_locale": "en",
   "minimum_chrome_version": "116",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "watnow@ugmi.ca",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -23,9 +34,20 @@
   "side_panel": {
     "default_path": "panel/panel.html"
   },
+  "sidebar_action": {
+    "default_panel": "panel/panel.html",
+    "default_title": "__MSG_appName__",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
   "options_page": "options/options.html",
   "background": {
     "service_worker": "src/background.js",
+    "scripts": [
+      "src/background.js"
+    ],
     "type": "module"
   },
   "permissions": [
@@ -33,7 +55,8 @@
     "storage",
     "notifications",
     "alarms",
-    "scripting"
+    "scripting",
+    "identity"
   ],
   "host_permissions": [
     "https://learn.uwaterloo.ca/*"
@@ -46,7 +69,9 @@
     "https://westernu.brightspace.com/*",
     "https://courses.torontomu.ca/*",
     "https://courses.ryerson.ca/*",
-    "https://app.crowdmark.com/*"
+    "https://app.crowdmark.com/*",
+    "https://www.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
   ],
   "content_scripts": [
     {

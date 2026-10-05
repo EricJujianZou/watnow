@@ -2,6 +2,8 @@
 
 import { getSettings, setSettings } from "../core/store.js";
 import { TESTER_BUILD } from "../core/build.js";
+import { IS_GECKO } from "../core/env.js";
+import { GOOGLE_BOUNCE_URL, googleConfigured } from "../calendar/google-config.js";
 import { LEADS, REMINDER_TYPES } from "../core/reminders.js";
 import { icon, esc } from "./icons.js";
 
@@ -18,11 +20,21 @@ const SOURCE_HELP = {
 
 const DEBUG_LINK = "Found a bug? Send Eric the debug report via Instagram @sleppyeric and he'll buy you a coffee :)";
 
+// Chrome can keep running after its last window closes, so reminders can still
+// go out. Gecko has no such setting, so that half of the note is dropped there.
 const BACKGROUND_STEPS = [
   "Open the three dot menu at the top right of Chrome.",
   "Choose Settings, then System in the left sidebar.",
   "Turn on Continue running background apps when Google Chrome is closed.",
 ];
+
+function remindersNote() {
+  if (IS_GECKO) {
+    return `<p class="note">${icon("info", 18)}<span>Notifications only show while your browser is open.</span></p>`;
+  }
+  return `<p class="note">${icon("info", 18)}<span>Notifications only show while Chrome is open. To keep getting them after you close every Chrome window, turn on <button class="tip-btn" data-act="bg-tip" aria-expanded="false">Continue running background apps</button> in Chrome's system settings.</span></p>
+      <div data-bg-tip></div>`;
+}
 
 function sourceSection(s) {
   const mode = s.mode === "live" ? "live" : "demo";
@@ -62,6 +74,25 @@ function leadRow(type, s) {
     </li>`;
 }
 
+/**
+ * Google Calendar, when this build is set up for it.
+ *
+ * Gecko gives every install its own sign-in address, which Google will not
+ * redirect to, so without a bounce page to stand in for it there is nothing to
+ * offer there but the file. See src/calendar/google.js.
+ */
+function googleSection() {
+  if (!googleConfigured()) return "";
+  if (IS_GECKO && !GOOGLE_BOUNCE_URL) {
+    return `<p class="set-help" style="margin-top:18px">Google Calendar can't connect itself on this browser, so use the file above. It imports into Google Calendar the same way.</p>`;
+  }
+  return `
+    <h3 style="margin-top:22px">Google Calendar</h3>
+    <p class="set-help">Keep a WATnow calendar in Google that updates itself whenever your deadlines change. WATnow makes a calendar of its own and only ever touches that one, so it can't see anything else in your Google account.</p>
+    <div class="row-actions" style="margin-top:14px" data-google-actions></div>
+    <p class="status-text" data-google-status role="status"></p>`;
+}
+
 function template(s, courses, context) {
   const r = s.reminders;
   const leadRows = REMINDER_TYPES.map((t) => leadRow(t, s)).join("");
@@ -88,8 +119,7 @@ function template(s, courses, context) {
       <h3>I want reminders for these courses</h3>
       ${courseList}
 
-      <p class="note">${icon("info", 18)}<span>Notifications only show while Chrome is open. To keep getting them after you close every Chrome window, turn on <button class="tip-btn" data-act="bg-tip" aria-expanded="false">Continue running background apps</button> in Chrome's system settings.</span></p>
-      <div data-bg-tip></div>
+      ${remindersNote()}
     </section>
 
     <section class="set-section" aria-labelledby="set-look">
@@ -97,6 +127,16 @@ function template(s, courses, context) {
       <div class="seg" role="radiogroup" aria-labelledby="set-look">
         ${theme("system", "Match system")}${theme("light", "Light")}${theme("dark", "Dark")}
       </div>
+    </section>
+
+    <section class="set-section" aria-labelledby="set-cal">
+      <h2 id="set-cal">Calendar</h2>
+      <p class="set-help">Put your deadlines in Google Calendar, Apple Calendar, Outlook or anything else that reads calendar files. Importing the file again later moves the dates that changed rather than making a second copy of everything.</p>
+      <div class="row-actions" style="margin-top:14px">
+        <button class="btn btn-primary btn-sm" data-act="cal-export">Export my deadlines</button>
+      </div>
+      <p class="status-text" data-cal-status role="status"></p>
+      ${googleSection()}
     </section>
 
     <section class="set-section" aria-labelledby="set-data">
@@ -110,9 +150,44 @@ function template(s, courses, context) {
   </div>`;
 }
 
+/**
+ * Hands the file to the browser's downloads.
+ *
+ * A link with download on it needs no permission, which a downloads API call
+ * would. The object URL is let go on the next turn of the loop, once the click
+ * has been taken.
+ */
+/** Connected or not, asked fresh each time settings opens. */
+async function renderGoogle(root) {
+  const slot = root.querySelector("[data-google-actions]");
+  if (!slot) return;
+  const res = await chrome.runtime.sendMessage({ type: "calendar:google-state" }).catch(() => null);
+  const connected = Boolean(res && res.connected);
+  slot.innerHTML = connected
+    ? `<button class="btn btn-quiet btn-sm" data-act="google-off">Disconnect Google Calendar</button>`
+    : `<button class="btn btn-primary btn-sm" data-act="google-on">Connect Google Calendar</button>`;
+  const status = root.querySelector("[data-google-status]");
+  if (status && connected) status.textContent = "Connected. Your deadlines go to the WATnow calendar in Google as they change.";
+}
+
+function saveIcs(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+
 export async function mountSettings(root, { courses = [], context = "panel", onDeleted } = {}) {
   let settings = await getSettings();
   root.innerHTML = template(settings, courses, context);
+  renderGoogle(root);
 
   // The panel mounts settings into the same element every time it is opened, so
   // the listeners are attached once. Two copies would cancel each other out.
@@ -163,6 +238,42 @@ export async function mountSettings(root, { courses = [], context = "panel", onD
   root.addEventListener("click", async (e) => {
     const t = e.target.closest("[data-course], [data-type-toggle], [data-act]");
     if (!t) return;
+
+    if (t.dataset.act === "google-on" || t.dataset.act === "google-off") {
+      const on = t.dataset.act === "google-on";
+      const status = root.querySelector("[data-google-status]");
+      t.disabled = true;
+      status.textContent = on ? "Opening Google to sign in…" : "Disconnecting…";
+      const res = await chrome.runtime.sendMessage({ type: on ? "calendar:google-connect" : "calendar:google-disconnect" }).catch(() => null);
+      t.disabled = false;
+      if (on && (!res || !res.ok)) {
+        const why = res && res.reason === "refused" ? "Google didn't give WATnow access." : res && res.reason === "cancelled" ? "The sign-in was closed before it finished." : "That didn't work.";
+        status.textContent = `${why} Select Connect Google Calendar to try again.`;
+        return;
+      }
+      await renderGoogle(root);
+      if (!on) status.textContent = "Disconnected. The WATnow calendar in Google is gone; nothing else was touched.";
+      return;
+    }
+
+    if (t.dataset.act === "cal-export") {
+      const status = root.querySelector("[data-cal-status]");
+      t.disabled = true;
+      status.textContent = "Building your calendar file…";
+      const res = await chrome.runtime.sendMessage({ type: "calendar:export" }).catch(() => null);
+      t.disabled = false;
+      if (!res || !res.ok || !res.ics) {
+        status.textContent = "That didn't work. Try again once WATnow has read your deadlines.";
+        return;
+      }
+      if (!res.counts.events) {
+        status.textContent = "There are no dated deadlines to export yet.";
+        return;
+      }
+      saveIcs(res.ics, res.filename);
+      status.textContent = `${res.counts.events} ${res.counts.events === 1 ? "deadline" : "deadlines"} saved as ${res.filename}. Import it into your calendar.`;
+      return;
+    }
 
     if (t.dataset.typeToggle) {
       const id = t.dataset.typeToggle;

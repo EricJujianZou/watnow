@@ -7,6 +7,7 @@ import { liveBase } from "../src/data/live-source.js";
 import { SCHOOLS, schoolById, currentSchool, systemName, homeUrl } from "../src/core/schools.js";
 import { TESTER_BUILD } from "../src/core/build.js";
 import { pingPanelOpen } from "../src/core/usage.js";
+import { IS_GECKO } from "../src/core/env.js";
 import { crowdmarkAllowed, crowdmarkBase } from "../src/data/crowdmark-source.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
@@ -27,15 +28,37 @@ let sawRunning = false;
 let advanceTimer = null;
 let earlierOpen = false;
 let listScroll = 0;
+// Gecko only: the student took away WATnow's access to Learn, so neither the
+// background nor a Learn tab can read anything until they give it back.
+let needsPerm = false;
 /** Whether Chrome gave WATnow access to Crowdmark. Checked on open and whenever the permission changes. */
 let cmAllowed = false;
 /** Set from the Connect click until Crowdmark reads or the student gives up, so the button can say Connecting. */
 let cmConnectingUntil = 0;
 const CM_CONNECT_WAIT_MS = 3 * 60 * 1000;
+/** Set when the browser refused access, so the button asks for it again instead of looking dead. */
+let cmDeniedUntil = 0;
+const CM_DENIED_MS = 8 * 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (type, extra = {}) => chrome.runtime.sendMessage({ type, ...extra }).catch(() => null);
 const reduced = () => reduceMotion.matches;
+const learnOrigins = () => [`${liveBase(settings)}/*`];
+
+/**
+ * Gecko treats access to Learn as revocable: it is granted when the add-on is
+ * installed, but the extensions button can take it away again, and then both
+ * the background and the content script are blocked. Always false on Chrome,
+ * which keeps its host permissions for good.
+ */
+async function missingPermission() {
+  if (!IS_GECKO || !chrome.permissions || !settings || settings.mode !== "live") return false;
+  try {
+    return !(await chrome.permissions.contains({ origins: learnOrigins() }));
+  } catch {
+    return false;
+  }
+}
 
 let queue = Promise.resolve();
 function enqueue(fn) {
@@ -108,6 +131,8 @@ function cmConnecting() {
 function cmButtonHTML(scan) {
   if (PREVIEW || scan !== "done" || !settings || settings.mode !== "live" || settings.school !== "uwaterloo") return "";
   if (cmConnecting()) return `<span class="btn btn-primary btn-sm cm-btn is-connecting" role="status">${icon("refresh", 16, "spin")}Connecting…</span>`;
+  // Access was refused. The button still connects, so one more select and an Allow is all it takes.
+  if (Date.now() < cmDeniedUntil) return `<button class="btn btn-primary btn-sm cm-btn" data-act="cm-connect">Allow access to connect</button>`;
   if (cmAllowed && !cmDown()) return `<span class="btn btn-quiet btn-sm cm-btn is-connected">Crowdmark Connected</span>`;
   return `<button class="btn btn-primary btn-sm cm-btn" data-act="cm-connect">Connect Crowdmark</button>`;
 }
@@ -117,22 +142,58 @@ async function refreshCm() {
   renderBar();
 }
 
-/** Asks Chrome for Crowdmark access, then reads. If access is already there, the student needs to sign in again. */
+/**
+ * Connect Crowdmark: gets access to Crowdmark if it isn't granted yet, then
+ * opens it so the student can sign in.
+ *
+ * One read is tried first, because a student already signed in on this browser
+ * is connected without needing a tab. Every other answer opens Crowdmark: not
+ * signed in, Crowdmark unreachable, or a browser that won't attach the session
+ * to a read from the background, which is every first connect on Gecko. In that
+ * last case the tab is what the background reads through, so opening it is the
+ * fix and not a fallback.
+ *
+ * "Connecting" stays up until that read lands (the background reads again as
+ * soon as a Crowdmark page finishes loading) or the wait runs out.
+ */
 async function connectCrowdmark() {
   const base = crowdmarkBase(settings);
   if (!cmAllowed) {
+    // permissions.request() does not work in a Firefox sidebar: it rejects with
+    // "An unexpected error occurred", because the sidebar has no
+    // PopupNotifications to hang the prompt on (bugzilla 1493396). No number of
+    // selects gets past that, so there the asking happens on a page in a tab.
+    if (IS_GECKO) {
+      cmDeniedUntil = 0;
+      cmConnectingUntil = Date.now() + CM_CONNECT_WAIT_MS;
+      renderBar();
+      announce("Finish connecting Crowdmark in the tab that just opened.");
+      chrome.tabs.create({ url: chrome.runtime.getURL("connect/connect.html") });
+      return;
+    }
+    // permissions.request only works straight from the click, so nothing is awaited before it.
     const ok = await chrome.permissions.request({ origins: [`${base}/*`] }).catch(() => false);
-    if (!ok) return;
+    if (!ok) {
+      announce("WATnow needs access to Crowdmark to read its deadlines. Select Connect Crowdmark again and choose Allow.");
+      cmDeniedUntil = Date.now() + CM_DENIED_MS;
+      renderBar();
+      setTimeout(renderBar, CM_DENIED_MS);
+      return;
+    }
+    cmDeniedUntil = 0;
     cmAllowed = true;
   }
   cmConnectingUntil = Date.now() + CM_CONNECT_WAIT_MS;
   renderBar();
   const res = await chrome.runtime.sendMessage({ type: "crowdmark:connect" }).catch(() => null);
-  const status = res && res.status;
-  // Not signed in yet: open the sign-in page and keep saying Connecting. The
-  // background reads Crowdmark again as soon as the sign-in finishes.
-  if (status === "signed-out") chrome.tabs.create({ url: `${base}/sign-in/waterloo` });
-  else if (status !== "ok") cmConnectingUntil = 0;
+  if (res && res.status === "ok") {
+    // Connected. The stored status says so too, but don't sit on "Connecting"
+    // waiting for that write to come back.
+    cmConnectingUntil = 0;
+  } else {
+    announce("Sign in to Crowdmark in the tab that just opened, and WATnow will pick up your deadlines.");
+    chrome.tabs.create({ url: `${base}/sign-in/waterloo` });
+  }
   renderBar();
   if (view === "list") renderList();
 }
@@ -258,7 +319,7 @@ function rowHTML(r) {
     </button>
     <button class="row-open" data-act="open" data-id="${esc(r.id)}">
       <span class="row-main">
-        <span class="meta"><span class="chip">${esc(r.code)}</span><span class="type">${icon(CATEGORY_ICON[r.category] || "doc", 16)}${esc(r.type)}</span></span>
+        <span class="meta"><span class="chip">${esc(r.code)}</span><span class="type">${icon(CATEGORY_ICON[r.category] || "doc", 16)}<span class="type-text">${esc(r.type)}</span></span></span>
         <span class="title">${esc(r.title)}</span>
         ${moved}
       </span>
@@ -568,6 +629,12 @@ function pickSchool() {
 
 function renderStateView(kind) {
   const views = {
+    "needs-permission": {
+      mark: icon("lock", 24),
+      title: "Let WATnow read Learn",
+      body: `${APP} reads learn.uwaterloo.ca with the session already signed in on this browser. Your browser is holding that access back, so nothing can be read until you allow it.`,
+      action: `<div class="row-actions"><button class="btn btn-primary" data-act="grant">Allow access</button></div>`,
+    },
     "signed-out": {
       mark: icon("lock", 24),
       title: `Sign in to ${lms()} first`,
@@ -726,6 +793,11 @@ function route() {
     renderStateView(PREVIEW);
     return;
   }
+  if (needsPerm) {
+    setView("needs-permission");
+    renderStateView("needs-permission");
+    return;
+  }
   const s = state.scan.status;
   if (state.deletedAt && s === "idle") {
     setView("deleted");
@@ -744,6 +816,8 @@ function route() {
 function onState(next) {
   const prev = state;
   state = next;
+  // Without access to Learn every read fails, so that screen stays put.
+  if (needsPerm) return;
   if (needsSchool()) return;
   if (view === "settings") {
     if (next.deletedAt && next.scan.status === "idle") {
@@ -835,6 +909,14 @@ app.addEventListener("click", (e) => {
     case "retry":
       send("panel:rescan");
       break;
+    case "grant":
+      // permissions.request needs a user gesture, which this click is.
+      chrome.permissions.request({ origins: learnOrigins() }).then((granted) => {
+        if (!granted) return;
+        needsPerm = false;
+        route();
+        send("panel:rescan");
+      }, () => {});
     case "pick-school":
       pickSchool();
       break;
@@ -877,6 +959,17 @@ document.addEventListener("keydown", (e) => {
   send(type);
 });
 
+chrome.permissions?.onRemoved?.addListener(async () => {
+  needsPerm = await missingPermission();
+  if (needsPerm) route();
+});
+
+chrome.permissions?.onAdded?.addListener(async () => {
+  if (!needsPerm) return;
+  needsPerm = await missingPermission();
+  if (!needsPerm) route();
+});
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.state) onState(changes.state.newValue || emptyState());
   if (area === "local" && changes.settings && changes.settings.newValue) {
@@ -906,9 +999,11 @@ setInterval(() => {
   filter = await getFilter();
   state = await getState();
   lastSeq = state.seq || 0;
+  needsPerm = await missingPermission();
   await document.fonts.ready.catch(() => {});
   cmAllowed = PREVIEW ? false : await crowdmarkAllowed(settings);
   route();
+  if (needsPerm) return;
   if (!PREVIEW) pingPanelOpen();
   if (!PREVIEW && !needsSchool() && (state.scan.status === "idle" || state.scan.status === "running") && !state.deletedAt) send("panel:opened");
   // The last check couldn't read Learn: try again now that the student is looking.

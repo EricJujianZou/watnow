@@ -11,6 +11,10 @@ import { DEMO_SCRIPT } from "./data/fixtures.js";
 import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
 import { plannedReminders, reminderCopy, movedCopy, unsubmittedCopy, canConfirm } from "./core/reminders.js";
 import { pingInstall, pingDayActive } from "./core/usage.js";
+import { IS_GECKO, HAS_SIDE_PANEL, HAS_SIDEBAR } from "./core/env.js";
+import { buildEvents, planSync, tombstones, CALENDAR_NAME } from "./calendar/events.js";
+import { toIcs, icsFilename } from "./calendar/ics.js";
+import { applyPlan, connectGoogle, disconnectGoogle, googleConfigured, googleConnected } from "./calendar/google.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
 
@@ -43,10 +47,15 @@ const nowIso = () => new Date().toISOString();
 async function setup() {
   await migrateSchool();
   await syncBridge().catch((e) => console.warn("bridge", e));
-  try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  } catch (e) {
-    console.warn("sidePanel behavior", e);
+  await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
+  // Chrome: clicking the toolbar icon opens the side panel. Gecko has no
+  // sidePanel API, so there the action click toggles the sidebar (see below).
+  if (HAS_SIDE_PANEL) {
+    try {
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    } catch (e) {
+      console.warn("sidePanel behavior", e);
+    }
   }
   await chrome.action.setBadgeBackgroundColor({ color: BADGE_BG });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
@@ -57,6 +66,20 @@ async function setup() {
   await scheduleReminders();
   chrome.alarms.create("tick", { periodInMinutes: 5 });
   await syncLiveAlarm();
+}
+
+// Gecko gives the sidebar its own button, but the action button is the one
+// that carries the badge, so its click toggles the sidebar. toggle() needs a
+// user gesture and an action click is one. This never fires on Chrome:
+// openPanelOnActionClick takes the click.
+if (!HAS_SIDE_PANEL && HAS_SIDEBAR) {
+  chrome.action.onClicked.addListener(() => {
+    try {
+      chrome.sidebarAction.toggle();
+    } catch (e) {
+      console.warn("sidebar toggle", e);
+    }
+  });
 }
 
 /** Every origin the LIVE site loads from: the school's, its aliases, and the test mock when one stands in. */
@@ -76,6 +99,7 @@ async function migrateSchool() {
 }
 
 const BRIDGE_ID = "school-bridge";
+const CM_BRIDGE_ID = "crowdmark-bridge";
 
 /**
  * The manifest runs the bridge on Waterloo Learn only. Another school's pages
@@ -97,8 +121,54 @@ async function syncBridge() {
   await chrome.scripting.registerContentScripts([{ id: BRIDGE_ID, matches: patterns, js: ["src/content/learn-bridge.js"], runAt: "document_start", persistAcrossSessions: true }]);
 }
 
-chrome.permissions.onAdded.addListener(() => syncBridge());
-chrome.permissions.onRemoved.addListener(() => syncBridge());
+/**
+ * Crowdmark is an optional permission, so its bridge is never in the manifest.
+ * It goes on once the student connects Crowdmark and comes off when they
+ * disconnect, so no script runs on a site they have not asked for.
+ */
+async function syncCrowdmarkBridge() {
+  if (!chrome.scripting) return;
+  const settings = await getSettings();
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [CM_BRIDGE_ID] });
+  } catch {
+    /* not registered */
+  }
+  if (!(await crowdmarkAllowed(settings))) return;
+  const matches = [`${crowdmarkBase(settings)}/*`];
+  try {
+    await chrome.scripting.registerContentScripts([{ id: CM_BRIDGE_ID, matches, js: ["src/content/crowdmark-bridge.js"], runAt: "document_end", persistAcrossSessions: true }]);
+  } catch (e) {
+    console.warn("crowdmark bridge", e);
+    return;
+  }
+  // Registering only covers pages loaded from here on, and a student who just
+  // connected may already have Crowdmark open. Those tabs get the bridge now,
+  // so the first read can use one instead of waiting for a fresh page.
+  let open = [];
+  try {
+    open = await chrome.tabs.query({ url: matches });
+  } catch {
+    return;
+  }
+  for (const tab of open) {
+    if (tab.discarded) continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/content/crowdmark-bridge.js"] });
+    } catch {
+      // The tab went away, or it isn't a page scripts can run on.
+    }
+  }
+}
+
+chrome.permissions.onAdded.addListener(() => {
+  syncBridge();
+  syncCrowdmarkBridge();
+});
+chrome.permissions.onRemoved.addListener(() => {
+  syncBridge();
+  syncCrowdmarkBridge();
+});
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") pingInstall();
@@ -275,6 +345,32 @@ async function syncLiveAlarm() {
   if (!existing) chrome.alarms.create(LIVE_SYNC, { delayInMinutes: 30, periodInMinutes: 30 });
 }
 
+/**
+ * Runs one GET through an open Crowdmark tab's content script
+ * (crowdmark-bridge.js), for a browser that won't attach the Crowdmark session
+ * to a request from the background. Only called after a read looked signed out.
+ */
+async function crowdmarkRelay(path) {
+  const settings = await getSettings();
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: `${crowdmarkBase(settings)}/*` });
+  } catch {
+    return { noTab: true };
+  }
+  tabs.sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0));
+  for (const tab of tabs) {
+    if (tab.discarded) continue;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: "crowdmark:fetch", path });
+      if (res) return res;
+    } catch {
+      // No bridge in this tab. A tab opened before the bridge was registered needs a reload.
+    }
+  }
+  return { noTab: true };
+}
+
 /** Runs one GET through an open Learn tab's content script (learn-bridge.js). */
 async function relayFetch(base, path) {
   let tabs = [];
@@ -349,7 +445,7 @@ async function addCrowdmark(settings, learnCourses, readOk, prevCourses, allowed
     for (const c of learnCourses) markOk(c.id);
     return { status: "off", courses: [], items: [], report: null };
   }
-  const cm = await readCrowdmark(settings, learnCourses);
+  const cm = await readCrowdmark(settings, learnCourses, { relay: crowdmarkRelay });
   if (cm.status !== "ok") return { status: cm.status, courses: before, items: [], report: cm.report };
   const had = new Set(before.map((c) => c.id));
   const courses = cm.courses.filter((c) => !c.readFailed || had.has(c.id)).map(({ readFailed, ...c }) => c);
@@ -600,6 +696,7 @@ async function runLiveScan(settings, epoch) {
     extra.outcome = "ok";
     extra.counts = { courses: result.courses.length, items: items.length, failedCourses: result.failed.size, moved: moved.length };
     extra.crowdmark = result.crowdmark;
+    syncGoogle();
     await wait(240);
     if (epoch !== modeEpoch) return;
     const latest = await getSettings();
@@ -744,6 +841,7 @@ async function runLiveSync({ fromPanel = false } = {}) {
     extra.outcome = "ok";
     extra.counts = { courses: result.courses.length, items: next.items.length, failedCourses: result.failed.size, moved: moved.length };
     extra.crowdmark = result.crowdmark;
+    syncGoogle();
     await notifyMoved(moved, next);
   } catch (e) {
     if (e.code === "aborted" || epoch !== modeEpoch) return;
@@ -807,13 +905,16 @@ async function refreshBadge() {
 
 async function notify(kind, itemId, copy, seq) {
   const id = `wn|${kind}|${itemId}|${seq || Date.now()}`;
-  await chrome.notifications.create(id, {
+  const options = {
     type: "basic",
     iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
     title: copy.title,
     message: copy.message,
-    priority: 2,
-  });
+  };
+  // Gecko accepts only those four and throws a type error on anything else,
+  // which would lose every reminder.
+  if (!IS_GECKO) options.priority = 2;
+  await chrome.notifications.create(id, options);
   return id;
 }
 
@@ -948,9 +1049,86 @@ async function submissionCheck(settings, item) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Calendar                                                            */
+/* ------------------------------------------------------------------ */
+
+const CALENDAR_INDEX = "calendarIndex";
+
+/**
+ * Each calendar keeps its own record of what it has been told.
+ *
+ * They are not interchangeable: saving a file and syncing Google are separate
+ * conversations, and one index shared between them would let an export consume
+ * the changes Google has not had yet, or the other way about.
+ */
+async function calendarIndex(which) {
+  const { [CALENDAR_INDEX]: all } = await chrome.storage.local.get(CALENDAR_INDEX);
+  return (all && all[which]) || {};
+}
+
+async function saveCalendarIndex(which, index) {
+  const { [CALENDAR_INDEX]: all } = await chrome.storage.local.get(CALENDAR_INDEX);
+  await chrome.storage.local.set({ [CALENDAR_INDEX]: { ...(all || {}), [which]: index } });
+}
+
+/**
+ * The deadlines as one calendar file.
+ *
+ * The index of what was last written lives here rather than in the page, so
+ * SEQUENCE keeps going up across exports and a second import changes the
+ * events already in the calendar instead of adding another set. A deadline
+ * that has gone is written out as cancelled for a while, so re-importing
+ * clears it too.
+ */
+async function buildCalendarFile() {
+  const s = await getState();
+  const now = new Date();
+  const events = buildEvents(s.items, s.courses);
+  const plan = planSync(await calendarIndex("ics"), events, now);
+  const cancelled = tombstones(plan.index, now);
+  const ics = toIcs(events, { seqOf: plan.index, cancelled, now, name: CALENDAR_NAME });
+  await saveCalendarIndex("ics", plan.index);
+  return {
+    ics,
+    filename: icsFilename(now),
+    counts: { events: events.length, added: plan.creates.length, changed: plan.updates.length, removed: cancelled.length },
+  };
+}
+
+let googleSyncing = false;
+
+/**
+ * Brings Google Calendar up to date with what was just read.
+ *
+ * Runs after every read, so a due date that moved on Learn is on the calendar
+ * within the same half hour the panel learns about it. Nothing is sent when
+ * nothing changed. Losing access stops the run and leaves the index alone, so
+ * the next one picks up from the same place once the student reconnects.
+ */
+async function syncGoogle() {
+  if (googleSyncing || !googleConfigured()) return null;
+  if (!(await googleConnected())) return null;
+  googleSyncing = true;
+  try {
+    const s = await getState();
+    const events = buildEvents(s.items, s.courses);
+    const plan = planSync(await calendarIndex("google"), events, new Date());
+    if (!plan.changed) return { ok: true, added: 0, changed: 0, removed: 0 };
+    const { index, result } = await applyPlan(plan);
+    await saveCalendarIndex("google", index);
+    return { ok: true, ...result };
+  } catch (e) {
+    console.warn("google calendar", e);
+    return { ok: false, reason: e.code || "error" };
+  } finally {
+    googleSyncing = false;
+  }
+}
+
 /** Asks Learn or Crowdmark, whichever the item lives on. */
 function askSubmitted(settings, item) {
-  return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item) : submissionCheck(settings, item);
+  return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item, crowdmarkRelay) : submissionCheck(settings, item);
 }
 
 function siteName(settings, item) {
@@ -1042,10 +1220,25 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// Chrome says the network is back. Only fires while the worker is awake; the
-// 5 minute tick covers the rest.
+// The browser says the network is back. Only fires while the worker is awake;
+// the 5 minute tick covers the rest.
 self.addEventListener("online", () => {
   retryUnreachable({ wentOffline: false });
+});
+
+// Gecko lets the student take away access to Learn and give it back from the
+// extensions button. Giving it back reads Learn straight away, so they don't
+// have to find the retry button.
+chrome.permissions?.onAdded?.addListener(async (added) => {
+  const origins = added.origins || [];
+  if (!origins.length || scanning) return;
+  const settings = await getSettings();
+  if (settings.mode !== "live") return;
+  // Connecting Crowdmark grants an origin too, and that reads Crowdmark on its
+  // own. Only access to the course site coming back is worth a full read.
+  const live = liveOrigins(settings);
+  if (!origins.some((o) => live.some((l) => o.startsWith(l)))) return;
+  runScan();
 });
 
 /* ------------------------------------------------------------------ */
@@ -1304,7 +1497,40 @@ async function handle(msg, sender) {
       return { ok: true };
     }
     case "crowdmark:connect":
+      // Access was just given, so register the bridge before reading. The connect
+      // page waits on this answer before it leaves for Crowdmark, so the page it
+      // lands on is one the background can read through.
+      await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
       return { ok: true, status: await readCrowdmarkOnly() };
+    case "calendar:google-state":
+      return { ok: true, configured: googleConfigured(), connected: await googleConnected() };
+    case "calendar:google-connect": {
+      try {
+        await connectGoogle();
+      } catch (e) {
+        return { ok: false, reason: e.code || "error", message: e.message };
+      }
+      const synced = await syncGoogle();
+      return { ok: true, synced };
+    }
+    case "calendar:google-disconnect":
+      await disconnectGoogle();
+      await saveCalendarIndex("google", {});
+      return { ok: true };
+    case "calendar:export": {
+      const file = await buildCalendarFile();
+      return { ok: true, ...file };
+    }
+    case "crowdmark:page": {
+      // The bridge is on a Crowdmark page, so a read that looked signed out
+      // now has a tab to run through. onUpdated above covers the same ground,
+      // and readCrowdmarkOnly ignores the second caller.
+      const settings = await getSettings();
+      if (settings.mode !== "live") return { ok: true };
+      const st = await getState();
+      if (!st.crowdmark || st.crowdmark.status !== "ok") readCrowdmarkOnly();
+      return { ok: true };
+    }
     case "crowdmark:probe":
       return { ok: true, report: await probeCrowdmark("worker") };
     case "settings:changed":
@@ -1325,14 +1551,23 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes.settings) {
     const before = changes.settings.oldValue;
     const after = changes.settings.newValue;
-    // A new school (or a new mode) starts over: the saved list belongs to the old site.
-    if (after && before && (before.mode !== after.mode || (before.school || null) !== (after.school || null))) {
-      modeEpoch++;
-      await chrome.alarms.clear("reminder");
-      await mutate(() => emptyState());
-      await syncLiveAlarm();
-      await refreshBadge();
-      await syncBridge().catch((e) => console.warn("bridge", e));
+    if (after && before) {
+      const schoolBefore = before.school || null;
+      const schoolAfter = after.school || null;
+      const schoolChanged = schoolBefore !== schoolAfter;
+      // migrateSchool() fills in Waterloo for an install from before the school
+      // picker. That is the same site it has been reading all along, so its
+      // saved list, reminders and badge stay; only a real change starts over.
+      const migrated = schoolChanged && !schoolBefore && schoolAfter === DEFAULT_SCHOOL;
+      // A new school (or a new mode) starts over: the saved list belongs to the old site.
+      if (before.mode !== after.mode || (schoolChanged && !migrated)) {
+        modeEpoch++;
+        await chrome.alarms.clear("reminder");
+        await mutate(() => emptyState());
+        await syncLiveAlarm();
+        await refreshBadge();
+      }
+      if (schoolChanged) await syncBridge().catch((e) => console.warn("bridge", e));
     }
     if (after && before && before.learnBase !== after.learnBase) {
       const cat = await getCatalog();
