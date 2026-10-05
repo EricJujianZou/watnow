@@ -450,12 +450,16 @@ function mergeLive(prevItems, fresh, { failed, readOk, courseIds }, now = new Da
         item.handIn = p.handIn;
         item.handInAt = p.handInAt;
       }
-    } else if (p.status === "submitted" && f.status === "open" && f.kind === "quiz") {
+    } else if (p.status === "submitted" && f.status === "open" && (f.kind === "quiz" || f.kind === "dropbox")) {
       // A quiz read doesn't always see the attempt (the quiz isn't linked in
-      // Content), so a quiz once confirmed as handed in stays that way.
+      // Content), and Learn stops showing a dropbox's submissions once the
+      // folder closes, so either one confirmed as handed in stays that way.
       item.status = "submitted";
       item.completedAt = p.completedAt;
     }
+    // A settled check is skipped on later reads, so the fresh row doesn't carry
+    // the flag. It stays until the prof moves the date, which can reopen it.
+    if (p.settled && !item.settled && Date.parse(p.dueAt) === Date.parse(f.dueAt)) item.settled = true;
     if (Date.parse(p.dueAt) !== Date.parse(f.dueAt)) {
       const fieldChanged = p.dueField && f.dueField && p.dueField !== f.dueField;
       if (!fieldChanged) {
@@ -546,10 +550,18 @@ function restoreAfterFailure(s, carry, kind, error) {
   s.stale = null;
 }
 
+/**
+ * Dropbox folders whose answer won't change (confirmed as handed in, or read
+ * once after they closed), so a read doesn't open their history pages again.
+ */
+function settledChecks(items) {
+  return new Set((items || []).filter((i) => i.kind === "dropbox" && (i.status === "submitted" || i.settled)).map((i) => i.id));
+}
+
 async function runLiveScan(settings, epoch) {
-  const source = createSource(settings, getCatalog, { relay: relayFetch });
   const before = await getState();
   const carry = carryOf(before);
+  const source = createSource(settings, getCatalog, { relay: relayFetch, settled: settledChecks(carry.items) });
   const firstRead = !carry.lastSyncAt && !carry.items.length;
   await mutate((s) => ({
     ...emptyState(),
@@ -703,7 +715,7 @@ async function runLiveSync({ fromPanel = false } = {}) {
   liveSyncing = true;
   const epoch = modeEpoch;
   const settings = await getSettings();
-  const source = createSource(settings, getCatalog, { relay: relayFetch });
+  const source = createSource(settings, getCatalog, { relay: relayFetch, settled: settledChecks(s0.items) });
   const extra = { run: "sync", fromPanel };
   await mutate((s) => {
     s.syncing = true;

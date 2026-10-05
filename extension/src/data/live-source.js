@@ -73,6 +73,12 @@
      GET /d2l/api/le/{le}/{orgUnitId}/dropbox/folders/{folderId}/submissions/mysubmissions/
        A non-empty list means submitted. Both a flat list of submissions and a
        list of { Submissions: [] } entities are accepted (VERIFY which one UW returns).
+       Once a folder is past Availability.EndDate, students get 403 here (UW,
+       checked Oct 2026), so a folder closed with something in it read as open.
+     GET /d2l/lms/dropbox/user/folders_history.d2l?db={folderId}&ou={orgUnitId}   (HTML)
+       Read after that 403. The "Submission ID  Submission(s)  Date Submitted"
+       header followed by a submission id means submitted; the page without
+       that table means nothing handed in.
      GET /d2l/api/le/{le}/{orgUnitId}/dropbox/categories/
        A category name containing "Lab" sets category "lab".
 
@@ -570,6 +576,9 @@ export class LiveSource {
     this.base = liveBase(settings);
     this.settings = settings;
     this.relay = opts.relay || null;
+    // Item ids of closed dropbox folders already read once (or confirmed as
+    // submitted). Their history pages aren't read again.
+    this.settled = opts.settled || new Set();
     this.now = opts.now || new Date();
     this.versions = null;
     this.via = "worker";
@@ -1077,7 +1086,11 @@ export class LiveSource {
       // has handed something in. Before that the link goes to the list page.
       const isGroup = f.GroupTypeId != null;
       let groupId = null;
-      try {
+      let settled = false;
+      // A closed folder already read once: Learn would refuse mysubmissions
+      // again and the history page won't change, so skip both.
+      const closed = isoOrNull(avail.EndDate) && Date.parse(avail.EndDate) < this.now.getTime();
+      if (!(closed && this.settled.has(`${ou}:dropbox:${f.Id}`))) try {
         const subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${f.Id}/submissions/mysubmissions/`));
         const dates = [];
         for (const s of subs) {
@@ -1091,6 +1104,11 @@ export class LiveSource {
         if (dates.length) submittedAt = dates.sort().pop();
       } catch (e) {
         if (e.code === "signed-out") throw e;
+        if (e.code === "forbidden") {
+          const page = await this.dropboxHistory(ou, f.Id);
+          if (page && page.submitted) submittedAt = this.now.toISOString();
+          if (page) settled = true;
+        }
       }
       out.push({
         kind: "dropbox",
@@ -1101,6 +1119,7 @@ export class LiveSource {
         opensAt: laterOnly(isoOrNull(avail.StartDate), dueAt),
         categoryName: catNames[f.CategoryId] || "",
         completedAt: submittedAt,
+        settled,
         groupId,
         groupFolder: isGroup,
         exactId: isGroup && groupId == null ? false : undefined,
@@ -1151,12 +1170,11 @@ export class LiveSource {
   }
 
   /**
-   * The "Completed - N" count from the quiz's summary page, or null when the
-   * page can't be read or doesn't have it. Only the worker reads it.
+   * One of Learn's own pages as plain text, or null when it can't be read.
+   * Only the worker reads pages; a tab relay only carries /d2l/api/ requests.
    */
-  async quizPageCompleted(ou, quizId, via) {
+  async pageText(path, via) {
     if (via !== "worker") return null;
-    const path = `/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${quizId}&ou=${ou}`;
     const gap = GAP_MS - (Date.now() - this.lastAt);
     if (gap > 0) await wait(gap);
     this.lastAt = Date.now();
@@ -1181,7 +1199,16 @@ export class LiveSource {
       entry.error = "network";
       return null;
     }
-    const plain = text.replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+    return text.replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+  }
+
+  /**
+   * The "Completed - N" count from the quiz's summary page, or null when the
+   * page can't be read or doesn't have it.
+   */
+  async quizPageCompleted(ou, quizId, via) {
+    const plain = await this.pageText(`/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${quizId}&ou=${ou}`, via);
+    if (plain == null) return null;
     const m = plain.match(/\bCompleted\s*[-\u2013\u2014:]\s*(\d+)/i);
     if (!m) {
       // Learn changed the page or shows it in another language; stop asking this run.
@@ -1189,8 +1216,27 @@ export class LiveSource {
       this.report.notes.push("quiz summary page has no completed count");
       return null;
     }
-    entry.count = Number(m[1]);
     return Number(m[1]);
+  }
+
+  /**
+   * Whether a dropbox folder has a submission, from its Submission History
+   * page. Learn answers mysubmissions with 403 once a folder is past its end
+   * date, but the history page still lists what was handed in. Resolves to
+   * { submitted: true, at: null }, { submitted: false }, or null when the page
+   * can't be read or doesn't look like a history page.
+   */
+  async dropboxHistory(ou, folderId, via = this.via) {
+    if (this.dropboxPageOff) return null;
+    const plain = await this.pageText(`/d2l/lms/dropbox/user/folders_history.d2l?db=${folderId}&ou=${ou}`, via);
+    if (plain == null) return null;
+    // The table's header row, then the first row's submission id.
+    if (/Submission ID\s+Submission\(s\)\s+Date Submitted\s+\d{4,}\s/i.test(plain)) return { submitted: true, at: null };
+    if (/Assignment Type/i.test(plain)) return { submitted: false };
+    // Learn changed the page or shows it in another language; stop asking this run.
+    this.dropboxPageOff = true;
+    this.report.notes.push("dropbox history page has no submissions table");
+    return null;
   }
 
   async readDiscussions(course, le, rep) {
@@ -1273,6 +1319,7 @@ export class LiveSource {
           seen: new Set([source]),
         };
         if (x.opensAt) item.opensAt = x.opensAt;
+        if (x.settled) item.settled = true;
         byKey.set(key, item);
         if (!byTitle.has(tkey)) byTitle.set(tkey, item);
         return;
@@ -1293,6 +1340,7 @@ export class LiveSource {
         found.learnUrl = x.url;
       }
       if (x.opensAt && (!found.opensAt || src === "tool")) found.opensAt = x.opensAt;
+      if (x.settled) found.settled = true;
       if (x.completedAt && found.status !== "submitted") {
         found.status = "submitted";
         found.completedAt = x.completedAt;
@@ -1432,7 +1480,16 @@ export class LiveSource {
       try {
         const { le } = await this.ensureVersions(via);
         if (kind === "dropbox") {
-          const subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${sourceId}/submissions/mysubmissions/`, { via }));
+          let subs;
+          try {
+            subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${sourceId}/submissions/mysubmissions/`, { via }));
+          } catch (e) {
+            if (e.code !== "forbidden") throw e;
+            // A closed folder: only its history page still says.
+            const page = await this.dropboxHistory(ou, sourceId, via);
+            if (page) return page;
+            throw e;
+          }
           const dates = [];
           for (const x of subs) {
             for (const y of x && Array.isArray(x.Submissions) ? x.Submissions : [x]) if (y) dates.push(isoOrNull(y.SubmissionDate) || new Date().toISOString());

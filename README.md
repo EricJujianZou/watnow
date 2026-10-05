@@ -69,7 +69,7 @@ Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/det
 This repo is public so you can read exactly what the extension does with your school account before you install it.
 
 - It reads your course site from inside your browser, using the session you're already signed in with. It never sees your password.
-- It only sends GET requests: to your school's `/d2l/api/`, to a quiz's summary page to see whether you've completed it, and to Crowdmark's student API if you connect it. It can't change anything on either site.
+- It only sends GET requests: to your school's `/d2l/api/`, to a quiz's summary page or a closed dropbox's submission history to see whether you've handed it in, and to Crowdmark's student API if you connect it. It can't change anything on either site.
 - Chrome asks you before WATnow can read any school other than Waterloo, or Crowdmark.
 - Your courses, deadlines and settings are saved in your browser's extension storage on your own computer.
 - The only thing it sends anywhere is an anonymous count: once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from your courses. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
