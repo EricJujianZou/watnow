@@ -319,7 +319,7 @@ function rowHTML(r) {
     </button>
     <button class="row-open" data-act="open" data-id="${esc(r.id)}">
       <span class="row-main">
-        <span class="meta"><span class="chip">${esc(r.code)}</span><span class="type">${icon(CATEGORY_ICON[r.category] || "doc", 16)}${esc(r.type)}</span></span>
+        <span class="meta"><span class="chip">${esc(r.code)}</span><span class="type">${icon(CATEGORY_ICON[r.category] || "doc", 16)}<span class="type-text">${esc(r.type)}</span></span></span>
         <span class="title">${esc(r.title)}</span>
         ${moved}
       </span>
