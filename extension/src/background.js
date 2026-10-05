@@ -453,6 +453,11 @@ function mergeLive(prevItems, fresh, { failed, readOk, courseIds }, now = new Da
         item.handIn = p.handIn;
         item.handInAt = p.handInAt;
       }
+    } else if (p.status === "submitted" && f.status === "open" && f.kind === "quiz") {
+      // A quiz read doesn't always see the attempt (the quiz isn't linked in
+      // Content), so a quiz once confirmed as handed in stays that way.
+      item.status = "submitted";
+      item.completedAt = p.completedAt;
     }
     if (Date.parse(p.dueAt) !== Date.parse(f.dueAt)) {
       const fieldChanged = p.dueField && f.dueField && p.dueField !== f.dueField;
