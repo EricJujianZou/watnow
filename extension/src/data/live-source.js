@@ -581,7 +581,7 @@ export class LiveSource {
     this.relay = opts.relay || null;
     // Closed dropbox folders that don't need their history page read this time,
     // as item id -> the due date they were checked against: confirmed as
-    // submitted, or read in the last day with nothing in them.
+    // submitted, or read in the last day and found empty or unreadable.
     this.skip = opts.skip || new Map();
     this.now = opts.now || new Date();
     this.versions = null;
@@ -1111,11 +1111,12 @@ export class LiveSource {
       } catch (e) {
         if (e.code === "signed-out") throw e;
         if (e.code === "forbidden") {
-          const page = await this.dropboxHistory(ou, f.Id);
-          if (page && page.submitted) submittedAt = this.now.toISOString();
-          // Nothing in it yet. An extension can still let the student hand it
-          // in, so it's read again a day later rather than settled.
-          else if (page) historyAt = this.now.toISOString();
+          const page = await this.readDropboxHistory(ou, f.Id);
+          if (page === "submitted") submittedAt = this.now.toISOString();
+          // Empty (an extension can still let the student hand it in) or a page
+          // that can't be read: read again a day later. A request that failed
+          // is tried again on the next sync.
+          else if (page !== "failed") historyAt = this.now.toISOString();
         }
       }
       out.push({
@@ -1228,25 +1229,36 @@ export class LiveSource {
   }
 
   /**
-   * Whether a dropbox folder has a submission, from its Submission History
-   * page. Learn answers mysubmissions with 403 once a folder is past its end
-   * date, but the history page still lists what was handed in. Resolves to
-   * { submitted: true, at: null }, { submitted: false }, or null when the page
-   * can't be read or doesn't look like a history page.
+   * Reads a dropbox folder's Submission History page. Learn answers
+   * mysubmissions with 403 once a folder is past its end date, but the history
+   * page still lists what was handed in. Resolves to "submitted", "empty",
+   * "unreadable" (the page came back but can't be told apart, so it can't count
+   * either way) or "failed" (the page didn't come back: offline, Learn down).
    */
-  async dropboxHistory(ou, folderId, via = this.via) {
-    if (this.dropboxPageOff) return null;
+  async readDropboxHistory(ou, folderId, via = this.via) {
+    if (this.dropboxPageOff) return "unreadable";
     const plain = await this.pageText(`/d2l/lms/dropbox/user/folders_history.d2l?db=${folderId}&ou=${ou}`, via);
-    if (plain == null) return null;
+    if (plain == null) return "failed";
     // The table's header row, then the first row's submission id.
-    if (/Submission ID\s+Submission\(s\)\s+Date Submitted\s+\d{4,}\s/i.test(plain)) return { submitted: true, at: null };
+    if (/Submission ID\s+Submission\(s\)\s+Date Submitted\s+\d{4,}\s/i.test(plain)) return "submitted";
     // A submissions table in another layout (a group folder with a "Submitted
     // By" column, say): something may be in it, so it can't count as empty.
-    if (/Submission ID|Date Submitted/i.test(plain)) return null;
-    if (/Assignment Type/i.test(plain)) return { submitted: false };
+    if (/Submission ID|Date Submitted/i.test(plain)) return "unreadable";
+    if (/Assignment Type/i.test(plain)) return "empty";
     // Learn changed the page or shows it in another language; stop asking this run.
     this.dropboxPageOff = true;
     this.report.notes.push("dropbox history page has no submissions table");
+    return "unreadable";
+  }
+
+  /**
+   * The history page as a submission check: { submitted: true, at: null },
+   * { submitted: false }, or null when it can't say.
+   */
+  async dropboxHistory(ou, folderId, via = this.via) {
+    const state = await this.readDropboxHistory(ou, folderId, via);
+    if (state === "submitted") return { submitted: true, at: null };
+    if (state === "empty") return { submitted: false };
     return null;
   }
 

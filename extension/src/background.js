@@ -552,8 +552,8 @@ function restoreAfterFailure(s, carry, kind, error) {
 
 /**
  * Closed dropbox folders a read can skip, as item id -> the due date they were
- * checked against: confirmed as handed in, or read in the last day with nothing
- * in them (an extension can still let the student hand it in).
+ * checked against: confirmed as handed in, or read in the last day and found
+ * empty (an extension can still let the student hand it in) or unreadable.
  */
 function skipChecks(items, now = Date.now()) {
   const recent = (i) => i.historyAt && now - Date.parse(i.historyAt) < 24 * 60 * 60 * 1000;
