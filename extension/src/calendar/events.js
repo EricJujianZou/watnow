@@ -4,9 +4,10 @@
   This is the part every calendar has in common. It turns the Deadline and
   Course objects the rest of WATnow already works with into plain event
   objects, and works out what changed since the last sync. Nothing here knows
-  about iCalendar or about Google: a calendar is whatever can create, change
-  and delete events, the same way a DeadlineSource is whatever can list
-  deadlines. See src/calendar/ics.js for the first one.
+  about iCalendar, or about any other way of getting events somewhere: a
+  calendar is whatever can create, change and delete them, the same way a
+  DeadlineSource is whatever can list deadlines. See src/calendar/ics.js for
+  the one that is here.
 
   An event ends at the due time and runs for half an hour before it, so the
   block finishes exactly when the work is due and an 11:59 pm deadline stays

@@ -3,7 +3,6 @@
 import { getSettings, setSettings } from "../core/store.js";
 import { TESTER_BUILD } from "../core/build.js";
 import { IS_GECKO } from "../core/env.js";
-import { GOOGLE_BOUNCE_URL, googleConfigured } from "../calendar/google-config.js";
 import { LEADS, REMINDER_TYPES } from "../core/reminders.js";
 import { icon, esc } from "./icons.js";
 
@@ -74,25 +73,6 @@ function leadRow(type, s) {
     </li>`;
 }
 
-/**
- * Google Calendar, when this build is set up for it.
- *
- * Gecko gives every install its own sign-in address, which Google will not
- * redirect to, so without a bounce page to stand in for it there is nothing to
- * offer there but the file. See src/calendar/google.js.
- */
-function googleSection() {
-  if (!googleConfigured()) return "";
-  if (IS_GECKO && !GOOGLE_BOUNCE_URL) {
-    return `<p class="set-help" style="margin-top:18px">Google Calendar can't connect itself on this browser, so use the file above. It imports into Google Calendar the same way.</p>`;
-  }
-  return `
-    <h3 style="margin-top:22px">Google Calendar</h3>
-    <p class="set-help">Keep a WATnow calendar in Google that updates itself whenever your deadlines change. WATnow makes a calendar of its own and only ever touches that one, so it can't see anything else in your Google account.</p>
-    <div class="row-actions" style="margin-top:14px" data-google-actions></div>
-    <p class="status-text" data-google-status role="status"></p>`;
-}
-
 function template(s, courses, context) {
   const r = s.reminders;
   const leadRows = REMINDER_TYPES.map((t) => leadRow(t, s)).join("");
@@ -136,7 +116,6 @@ function template(s, courses, context) {
         <button class="btn btn-primary btn-sm" data-act="cal-export">Export my deadlines</button>
       </div>
       <p class="status-text" data-cal-status role="status"></p>
-      ${googleSection()}
     </section>
 
     <section class="set-section" aria-labelledby="set-data">
@@ -157,19 +136,6 @@ function template(s, courses, context) {
  * would. The object URL is let go on the next turn of the loop, once the click
  * has been taken.
  */
-/** Connected or not, asked fresh each time settings opens. */
-async function renderGoogle(root) {
-  const slot = root.querySelector("[data-google-actions]");
-  if (!slot) return;
-  const res = await chrome.runtime.sendMessage({ type: "calendar:google-state" }).catch(() => null);
-  const connected = Boolean(res && res.connected);
-  slot.innerHTML = connected
-    ? `<button class="btn btn-quiet btn-sm" data-act="google-off">Disconnect Google Calendar</button>`
-    : `<button class="btn btn-primary btn-sm" data-act="google-on">Connect Google Calendar</button>`;
-  const status = root.querySelector("[data-google-status]");
-  if (status && connected) status.textContent = "Connected. Your deadlines go to the WATnow calendar in Google as they change.";
-}
-
 function saveIcs(text, filename) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/calendar;charset=utf-8" }));
   const a = document.createElement("a");
@@ -187,7 +153,6 @@ function saveIcs(text, filename) {
 export async function mountSettings(root, { courses = [], context = "panel", onDeleted } = {}) {
   let settings = await getSettings();
   root.innerHTML = template(settings, courses, context);
-  renderGoogle(root);
 
   // The panel mounts settings into the same element every time it is opened, so
   // the listeners are attached once. Two copies would cancel each other out.
@@ -238,23 +203,6 @@ export async function mountSettings(root, { courses = [], context = "panel", onD
   root.addEventListener("click", async (e) => {
     const t = e.target.closest("[data-course], [data-type-toggle], [data-act]");
     if (!t) return;
-
-    if (t.dataset.act === "google-on" || t.dataset.act === "google-off") {
-      const on = t.dataset.act === "google-on";
-      const status = root.querySelector("[data-google-status]");
-      t.disabled = true;
-      status.textContent = on ? "Opening Google to sign in…" : "Disconnecting…";
-      const res = await chrome.runtime.sendMessage({ type: on ? "calendar:google-connect" : "calendar:google-disconnect" }).catch(() => null);
-      t.disabled = false;
-      if (on && (!res || !res.ok)) {
-        const why = res && res.reason === "refused" ? "Google didn't give WATnow access." : res && res.reason === "cancelled" ? "The sign-in was closed before it finished." : "That didn't work.";
-        status.textContent = `${why} Select Connect Google Calendar to try again.`;
-        return;
-      }
-      await renderGoogle(root);
-      if (!on) status.textContent = "Disconnected. The WATnow calendar in Google is gone; nothing else was touched.";
-      return;
-    }
 
     if (t.dataset.act === "cal-export") {
       const status = root.querySelector("[data-cal-status]");

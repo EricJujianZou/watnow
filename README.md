@@ -79,7 +79,7 @@ This repo is public so you can read exactly what the extension does with your sc
   - another school's Brightspace, if you pick that school instead of Waterloo. WATnow reads the same `/d2l/api/` routes on it.
   - Crowdmark, if you select **Connect Crowdmark**. It reads `app.crowdmark.com/api/v2/student/` for your courses and their assignment due dates. Disconnecting takes the permission away and its deadlines leave the panel on the next check.
 - Your courses, deadlines and settings are saved in your browser's extension storage on your own computer.
-- The calendar file is made on your computer and sent nowhere. Google Calendar is the one feature that would send anything about your courses off this computer, and it is switched off in this build; [`docs/google-calendar.md`](docs/google-calendar.md) says what turning it on would take, and what it would mean for this section.
+- The calendar file is made on your computer and sent nowhere. Importing it into a calendar is something you do yourself, with a file you can read first.
 - The Chrome build sends one thing: an anonymous count, once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from your courses. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
 - The Firefox build sends nothing at all. That is what the `data_collection_permissions` of `none` in the manifest means, and `usage.js` returns early on Firefox.
 

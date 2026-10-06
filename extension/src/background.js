@@ -14,7 +14,6 @@ import { pingInstall, pingDayActive } from "./core/usage.js";
 import { IS_GECKO, HAS_SIDE_PANEL, HAS_SIDEBAR } from "./core/env.js";
 import { buildEvents, planSync, tombstones, CALENDAR_NAME } from "./calendar/events.js";
 import { toIcs, icsFilename } from "./calendar/ics.js";
-import { applyPlan, connectGoogle, disconnectGoogle, googleConfigured, googleConnected } from "./calendar/google.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
 
@@ -696,7 +695,6 @@ async function runLiveScan(settings, epoch) {
     extra.outcome = "ok";
     extra.counts = { courses: result.courses.length, items: items.length, failedCourses: result.failed.size, moved: moved.length };
     extra.crowdmark = result.crowdmark;
-    syncGoogle();
     await wait(240);
     if (epoch !== modeEpoch) return;
     const latest = await getSettings();
@@ -841,7 +839,6 @@ async function runLiveSync({ fromPanel = false } = {}) {
     extra.outcome = "ok";
     extra.counts = { courses: result.courses.length, items: next.items.length, failedCourses: result.failed.size, moved: moved.length };
     extra.crowdmark = result.crowdmark;
-    syncGoogle();
     await notifyMoved(moved, next);
   } catch (e) {
     if (e.code === "aborted" || epoch !== modeEpoch) return;
@@ -1055,21 +1052,10 @@ async function submissionCheck(settings, item) {
 
 const CALENDAR_INDEX = "calendarIndex";
 
-/**
- * Each calendar keeps its own record of what it has been told.
- *
- * They are not interchangeable: saving a file and syncing Google are separate
- * conversations, and one index shared between them would let an export consume
- * the changes Google has not had yet, or the other way about.
- */
-async function calendarIndex(which) {
-  const { [CALENDAR_INDEX]: all } = await chrome.storage.local.get(CALENDAR_INDEX);
-  return (all && all[which]) || {};
-}
-
-async function saveCalendarIndex(which, index) {
-  const { [CALENDAR_INDEX]: all } = await chrome.storage.local.get(CALENDAR_INDEX);
-  await chrome.storage.local.set({ [CALENDAR_INDEX]: { ...(all || {}), [which]: index } });
+/** What the last export told the calendar, so the next one knows what changed. */
+async function calendarIndex() {
+  const { [CALENDAR_INDEX]: saved } = await chrome.storage.local.get(CALENDAR_INDEX);
+  return saved || {};
 }
 
 /**
@@ -1085,45 +1071,15 @@ async function buildCalendarFile() {
   const s = await getState();
   const now = new Date();
   const events = buildEvents(s.items, s.courses);
-  const plan = planSync(await calendarIndex("ics"), events, now);
+  const plan = planSync(await calendarIndex(), events, now);
   const cancelled = tombstones(plan.index, now);
   const ics = toIcs(events, { seqOf: plan.index, cancelled, now, name: CALENDAR_NAME });
-  await saveCalendarIndex("ics", plan.index);
+  await chrome.storage.local.set({ [CALENDAR_INDEX]: plan.index });
   return {
     ics,
     filename: icsFilename(now),
     counts: { events: events.length, added: plan.creates.length, changed: plan.updates.length, removed: cancelled.length },
   };
-}
-
-let googleSyncing = false;
-
-/**
- * Brings Google Calendar up to date with what was just read.
- *
- * Runs after every read, so a due date that moved on Learn is on the calendar
- * within the same half hour the panel learns about it. Nothing is sent when
- * nothing changed. Losing access stops the run and leaves the index alone, so
- * the next one picks up from the same place once the student reconnects.
- */
-async function syncGoogle() {
-  if (googleSyncing || !googleConfigured()) return null;
-  if (!(await googleConnected())) return null;
-  googleSyncing = true;
-  try {
-    const s = await getState();
-    const events = buildEvents(s.items, s.courses);
-    const plan = planSync(await calendarIndex("google"), events, new Date());
-    if (!plan.changed) return { ok: true, added: 0, changed: 0, removed: 0 };
-    const { index, result } = await applyPlan(plan);
-    await saveCalendarIndex("google", index);
-    return { ok: true, ...result };
-  } catch (e) {
-    console.warn("google calendar", e);
-    return { ok: false, reason: e.code || "error" };
-  } finally {
-    googleSyncing = false;
-  }
 }
 
 /** Asks Learn or Crowdmark, whichever the item lives on. */
@@ -1502,21 +1458,6 @@ async function handle(msg, sender) {
       // lands on is one the background can read through.
       await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
       return { ok: true, status: await readCrowdmarkOnly() };
-    case "calendar:google-state":
-      return { ok: true, configured: googleConfigured(), connected: await googleConnected() };
-    case "calendar:google-connect": {
-      try {
-        await connectGoogle();
-      } catch (e) {
-        return { ok: false, reason: e.code || "error", message: e.message };
-      }
-      const synced = await syncGoogle();
-      return { ok: true, synced };
-    }
-    case "calendar:google-disconnect":
-      await disconnectGoogle();
-      await saveCalendarIndex("google", {});
-      return { ok: true };
     case "calendar:export": {
       const file = await buildCalendarFile();
       return { ok: true, ...file };

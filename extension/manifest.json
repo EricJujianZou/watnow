@@ -55,8 +55,7 @@
     "storage",
     "notifications",
     "alarms",
-    "scripting",
-    "identity"
+    "scripting"
   ],
   "host_permissions": [
     "https://learn.uwaterloo.ca/*"
@@ -69,9 +68,7 @@
     "https://westernu.brightspace.com/*",
     "https://courses.torontomu.ca/*",
     "https://courses.ryerson.ca/*",
-    "https://app.crowdmark.com/*",
-    "https://www.googleapis.com/*",
-    "https://oauth2.googleapis.com/*"
+    "https://app.crowdmark.com/*"
   ],
   "content_scripts": [
     {
