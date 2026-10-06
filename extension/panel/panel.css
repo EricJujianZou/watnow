@@ -91,6 +91,11 @@ body {
   .bar:has(.cm-btn) .brand-name {
     display: none;
   }
+
+  /* With only the tile left, the brand never gives up width. The round buttons shrink first. */
+  .bar:has(.cm-btn) .brand {
+    flex: none;
+  }
 }
 
 /* Narrow side panels: tighten the bar so the mark tile keeps its size. */
@@ -103,12 +108,82 @@ body {
     padding: 0 10px;
     font-size: 13px;
   }
+
+  /* The calendar export button made four round buttons; a smaller circle keeps the mark tile whole at 320px. */
+  .bar:has(.cm-btn) .icon-btn {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 @media (max-width: 339px) {
   .cm-btn {
     padding: 0 6px;
   }
+}
+
+.calendar-bar-btn {
+  position: relative;
+}
+
+.calendar-dot {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--done);
+  box-shadow: 0 0 0 2px var(--sheet);
+}
+
+.calendar-dot.is-attention {
+  background: var(--late);
+}
+
+.calendar-dot.is-connecting {
+  background: var(--accent-press);
+}
+
+.calendar-optin-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  backdrop-filter: blur(2px);
+}
+
+.calendar-optin-card {
+  background: var(--sheet);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  max-width: 320px;
+  box-shadow: var(--clay-md);
+}
+
+.calendar-optin-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-bold);
+  margin: 0 0 8px;
+  color: var(--ink);
+}
+
+.calendar-optin-desc {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+  line-height: var(--leading-normal);
+  margin: 0 0 16px;
+}
+
+.calendar-optin-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .bar-status {
@@ -446,20 +521,44 @@ details.group > summary:hover .gh-title {
   min-width: 0;
 }
 
+/* Chip and type sit on one line while they fit. A long type, which is what a
+   Crowdmark item has, drops to its own line in a narrow side panel rather than
+   running under the due date on the right. */
 .meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   min-width: 0;
 }
 
+.meta .chip {
+  flex: none;
+}
+
+/* Does not shrink, so a type too long for what is left of the line drops to the
+   next one whole, rather than being trimmed while there is room below. */
 .type {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
+  max-width: 100%;
   gap: 5px;
+  min-width: 0;
   font-size: var(--text-sm);
   line-height: 1;
   color: var(--ink-muted);
+}
+
+.type > svg {
+  flex: none;
+}
+
+/* Narrower than one word of it: trimmed, so it can never reach the due column. */
+.type-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

@@ -1,7 +1,9 @@
 // Reminder, appearance and privacy settings. Mounted in the side panel and on the settings page.
 
-import { getSettings, setSettings } from "../core/store.js";
+import { getSettings, setSettings, getCalendarState } from "../core/store.js";
+import { calendarSettingsHTML, wireCalendarControls } from "./calendar-view.js";
 import { TESTER_BUILD } from "../core/build.js";
+import { IS_GECKO } from "../core/env.js";
 import { LEADS, REMINDER_TYPES } from "../core/reminders.js";
 import { icon, esc } from "./icons.js";
 
@@ -18,11 +20,21 @@ const SOURCE_HELP = {
 
 const DEBUG_LINK = "Found a bug? Send Eric the debug report via Instagram @sleppyeric and he'll buy you a coffee :)";
 
+// Chrome can keep running after its last window closes, so reminders can still
+// go out. Gecko has no such setting, so that half of the note is dropped there.
 const BACKGROUND_STEPS = [
   "Open the three dot menu at the top right of Chrome.",
   "Choose Settings, then System in the left sidebar.",
   "Turn on Continue running background apps when Google Chrome is closed.",
 ];
+
+function remindersNote() {
+  if (IS_GECKO) {
+    return `<p class="note">${icon("info", 18)}<span>Notifications only show while your browser is open.</span></p>`;
+  }
+  return `<p class="note">${icon("info", 18)}<span>Notifications only show while Chrome is open. To keep getting them after you close every Chrome window, turn on <button class="tip-btn" data-act="bg-tip" aria-expanded="false">Continue running background apps</button> in Chrome's system settings.</span></p>
+      <div data-bg-tip></div>`;
+}
 
 function sourceSection(s) {
   const mode = s.mode === "live" ? "live" : "demo";
@@ -62,7 +74,7 @@ function leadRow(type, s) {
     </li>`;
 }
 
-function template(s, courses, context) {
+function template(s, courses, context, calendar) {
   const r = s.reminders;
   const leadRows = REMINDER_TYPES.map((t) => leadRow(t, s)).join("");
 
@@ -77,9 +89,21 @@ function template(s, courses, context) {
 
   const theme = (v, label) => `<label><input type="radio" name="theme" value="${v}" ${s.theme === v ? "checked" : ""}><span>${label}</span></label>`;
 
+  const calendarSection = calendar
+    ? `<section class="set-section" aria-labelledby="set-calendar" data-calendar-settings>${calendarSettingsHTML(calendar)}</section>`
+    : "";
+
   return `
   <div class="settings">
     ${context === "panel" && !TESTER_BUILD ? sourceSection(s) : ""}
+    <section class="set-section" aria-labelledby="set-cal">
+      <h2 id="set-cal">Calendar</h2>
+      <p class="set-help">Export your deadlines as an .ics file to add to your calendar. You can look up a tutorial how to do that for your Calendar app. If your deadline changes, importing again will only change that deadline, it won't duplicate everything.</p>
+      <div class="row-actions" style="margin-top:14px">
+        <button class="btn btn-primary btn-sm" data-act="cal-export">Export my deadlines</button>
+      </div>
+      <p class="status-text" data-cal-status role="status"></p>
+    </section>
     <section class="set-section" aria-labelledby="set-rem">
       <h2 id="set-rem">Reminders</h2>
       <h3>Deadline type</h3>
@@ -88,9 +112,9 @@ function template(s, courses, context) {
       <h3>I want reminders for these courses</h3>
       ${courseList}
 
-      <p class="note">${icon("info", 18)}<span>Notifications only show while Chrome is open. To keep getting them after you close every Chrome window, turn on <button class="tip-btn" data-act="bg-tip" aria-expanded="false">Continue running background apps</button> in Chrome's system settings.</span></p>
-      <div data-bg-tip></div>
+      ${remindersNote()}
     </section>
+    ${calendarSection}
 
     <section class="set-section" aria-labelledby="set-look">
       <h2 id="set-look">Appearance</h2>
@@ -99,9 +123,10 @@ function template(s, courses, context) {
       </div>
     </section>
 
+
     <section class="set-section" aria-labelledby="set-data">
       <h2 id="set-data">My data</h2>
-      <p class="note" style="margin-top:6px">${icon("lock", 18)}<span>WATnow reads Learn with the session that's already signed in on this browser, so it never sees your password. Your deadlines and settings stay on this computer.</span></p>
+      <p class="note" style="margin-top:6px">${icon("lock", 18)}<span>WATnow reads Learn with the session that's already signed in on this browser, so it never sees your password. Deadlines and settings are saved on this computer. If you connect Google Calendar, deadline details are also sent to your chosen Google account.</span></p>
       <div style="margin-top:16px" data-delete-area>
         <button class="btn btn-danger btn-sm" data-act="ask-delete">Delete my data</button>
       </div>
@@ -110,9 +135,31 @@ function template(s, courses, context) {
   </div>`;
 }
 
+/**
+ * Hands the file to the browser's downloads.
+ *
+ * A link with download on it needs no permission, which a downloads API call
+ * would. The object URL is let go on the next turn of the loop, once the click
+ * has been taken.
+ */
+function saveIcs(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+
 export async function mountSettings(root, { courses = [], context = "panel", onDeleted } = {}) {
   let settings = await getSettings();
-  root.innerHTML = template(settings, courses, context);
+  root.innerHTML = template(settings, courses, context, await getCalendarState());
+  wireCalendarControls(root);
 
   // The panel mounts settings into the same element every time it is opened, so
   // the listeners are attached once. Two copies would cancel each other out.
@@ -164,6 +211,25 @@ export async function mountSettings(root, { courses = [], context = "panel", onD
     const t = e.target.closest("[data-course], [data-type-toggle], [data-act]");
     if (!t) return;
 
+    if (t.dataset.act === "cal-export") {
+      const status = root.querySelector("[data-cal-status]");
+      t.disabled = true;
+      status.textContent = "Building your calendar file…";
+      const res = await chrome.runtime.sendMessage({ type: "calendar:export" }).catch(() => null);
+      t.disabled = false;
+      if (!res || !res.ok || !res.ics) {
+        status.textContent = "That didn't work. Try again once WATnow has read your deadlines.";
+        return;
+      }
+      if (!res.counts.events) {
+        status.textContent = "There are no dated deadlines to export yet.";
+        return;
+      }
+      saveIcs(res.ics, res.filename);
+      status.textContent = `${res.counts.events} ${res.counts.events === 1 ? "deadline" : "deadlines"} saved as ${res.filename}. Import it into your calendar.`;
+      return;
+    }
+
     if (t.dataset.typeToggle) {
       const id = t.dataset.typeToggle;
       const on = t.getAttribute("aria-checked") !== "true";
@@ -211,7 +277,7 @@ export async function mountSettings(root, { courses = [], context = "panel", onD
     switch (t.dataset.act) {
       case "ask-delete":
         area.innerHTML = `<div class="confirm" role="group" aria-label="Confirm delete">
-          <p>This deletes everything WATnow saved on this computer, including the items you checked off.</p>
+          <p>This deletes everything WATnow saved on this computer, including the items you checked off, and disconnects Google Calendar. Existing Google Calendar events remain.</p>
           <div class="row-actions">
             <button class="btn btn-danger-solid btn-sm" data-act="confirm-delete">Delete</button>
             <button class="btn btn-quiet btn-sm" data-act="cancel-delete">Keep my data</button>

@@ -11,8 +11,13 @@ import { DEMO_SCRIPT } from "./data/fixtures.js";
 import { addDays, endOfWeek, startOfDay } from "./core/dates.js";
 import { plannedReminders, reminderCopy, movedCopy, unsubmittedCopy, canConfirm } from "./core/reminders.js";
 import { pingInstall, pingDayActive } from "./core/usage.js";
+import { IS_GECKO, HAS_SIDE_PANEL, HAS_SIDEBAR } from "./core/env.js";
+import { buildEvents, planSync, tombstones, CALENDAR_NAME } from "./calendar/events.js";
+import { toIcs, icsFilename } from "./calendar/ics.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
+import { updateCalendarState } from "./core/store.js";
+import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, recoverCalendarSync, stopCalendarSync } from "./calendar/calendar-sync.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -43,10 +48,15 @@ const nowIso = () => new Date().toISOString();
 async function setup() {
   await migrateSchool();
   await syncBridge().catch((e) => console.warn("bridge", e));
-  try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-  } catch (e) {
-    console.warn("sidePanel behavior", e);
+  await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
+  // Chrome: clicking the toolbar icon opens the side panel. Gecko has no
+  // sidePanel API, so there the action click toggles the sidebar (see below).
+  if (HAS_SIDE_PANEL) {
+    try {
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    } catch (e) {
+      console.warn("sidePanel behavior", e);
+    }
   }
   await chrome.action.setBadgeBackgroundColor({ color: BADGE_BG });
   if (chrome.action.setBadgeTextColor) await chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
@@ -57,6 +67,21 @@ async function setup() {
   await scheduleReminders();
   chrome.alarms.create("tick", { periodInMinutes: 5 });
   await syncLiveAlarm();
+  await resumeCalendarSync();
+}
+
+// Gecko gives the sidebar its own button, but the action button is the one
+// that carries the badge, so its click toggles the sidebar. toggle() needs a
+// user gesture and an action click is one. This never fires on Chrome:
+// openPanelOnActionClick takes the click.
+if (!HAS_SIDE_PANEL && HAS_SIDEBAR) {
+  chrome.action.onClicked.addListener(() => {
+    try {
+      chrome.sidebarAction.toggle();
+    } catch (e) {
+      console.warn("sidebar toggle", e);
+    }
+  });
 }
 
 /** Every origin the LIVE site loads from: the school's, its aliases, and the test mock when one stands in. */
@@ -76,6 +101,7 @@ async function migrateSchool() {
 }
 
 const BRIDGE_ID = "school-bridge";
+const CM_BRIDGE_ID = "crowdmark-bridge";
 
 /**
  * The manifest runs the bridge on Waterloo Learn only. Another school's pages
@@ -97,14 +123,64 @@ async function syncBridge() {
   await chrome.scripting.registerContentScripts([{ id: BRIDGE_ID, matches: patterns, js: ["src/content/learn-bridge.js"], runAt: "document_start", persistAcrossSessions: true }]);
 }
 
-chrome.permissions.onAdded.addListener(() => syncBridge());
-chrome.permissions.onRemoved.addListener(() => syncBridge());
+/**
+ * Crowdmark is an optional permission, so its bridge is never in the manifest.
+ * It goes on once the student connects Crowdmark and comes off when they
+ * disconnect, so no script runs on a site they have not asked for.
+ */
+async function syncCrowdmarkBridge() {
+  if (!chrome.scripting) return;
+  const settings = await getSettings();
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: [CM_BRIDGE_ID] });
+  } catch {
+    /* not registered */
+  }
+  if (!(await crowdmarkAllowed(settings))) return;
+  const matches = [`${crowdmarkBase(settings)}/*`];
+  try {
+    await chrome.scripting.registerContentScripts([{ id: CM_BRIDGE_ID, matches, js: ["src/content/crowdmark-bridge.js"], runAt: "document_end", persistAcrossSessions: true }]);
+  } catch (e) {
+    console.warn("crowdmark bridge", e);
+    return;
+  }
+  // Registering only covers pages loaded from here on, and a student who just
+  // connected may already have Crowdmark open. Those tabs get the bridge now,
+  // so the first read can use one instead of waiting for a fresh page.
+  let open = [];
+  try {
+    open = await chrome.tabs.query({ url: matches });
+  } catch {
+    return;
+  }
+  for (const tab of open) {
+    if (tab.discarded) continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["src/content/crowdmark-bridge.js"] });
+    } catch {
+      // The tab went away, or it isn't a page scripts can run on.
+    }
+  }
+}
+
+chrome.permissions.onAdded.addListener(() => {
+  syncBridge();
+  syncCrowdmarkBridge();
+});
+chrome.permissions.onRemoved.addListener(() => {
+  syncBridge();
+  syncCrowdmarkBridge();
+});
+
 
 chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === "install") pingInstall();
-  setup();
+  if (details.reason === "install") {
+    pingInstall();
+    chrome.tabs.create({ url: chrome.runtime.getURL("welcome/welcome.html") });
+  }
+  setup().then(recoverCalendarSync);
 });
-chrome.runtime.onStartup.addListener(() => setup().then(startupCheck));
+chrome.runtime.onStartup.addListener(() => setup().then(startupCheck).then(recoverCalendarSync));
 
 /**
  * Once per browser session (chrome.storage.session is empty after Chrome
@@ -275,6 +351,32 @@ async function syncLiveAlarm() {
   if (!existing) chrome.alarms.create(LIVE_SYNC, { delayInMinutes: 30, periodInMinutes: 30 });
 }
 
+/**
+ * Runs one GET through an open Crowdmark tab's content script
+ * (crowdmark-bridge.js), for a browser that won't attach the Crowdmark session
+ * to a request from the background. Only called after a read looked signed out.
+ */
+async function crowdmarkRelay(path) {
+  const settings = await getSettings();
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: `${crowdmarkBase(settings)}/*` });
+  } catch {
+    return { noTab: true };
+  }
+  tabs.sort((a, b) => Number(b.active) - Number(a.active) || (b.lastAccessed || 0) - (a.lastAccessed || 0));
+  for (const tab of tabs) {
+    if (tab.discarded) continue;
+    try {
+      const res = await chrome.tabs.sendMessage(tab.id, { type: "crowdmark:fetch", path });
+      if (res) return res;
+    } catch {
+      // No bridge in this tab. A tab opened before the bridge was registered needs a reload.
+    }
+  }
+  return { noTab: true };
+}
+
 /** Runs one GET through an open Learn tab's content script (learn-bridge.js). */
 async function relayFetch(base, path) {
   let tabs = [];
@@ -349,7 +451,7 @@ async function addCrowdmark(settings, learnCourses, readOk, prevCourses, allowed
     for (const c of learnCourses) markOk(c.id);
     return { status: "off", courses: [], items: [], report: null };
   }
-  const cm = await readCrowdmark(settings, learnCourses);
+  const cm = await readCrowdmark(settings, learnCourses, { relay: crowdmarkRelay });
   if (cm.status !== "ok") return { status: cm.status, courses: before, items: [], report: cm.report };
   const had = new Set(before.map((c) => c.id));
   const courses = cm.courses.filter((c) => !c.readFailed || had.has(c.id)).map(({ readFailed, ...c }) => c);
@@ -450,12 +552,16 @@ function mergeLive(prevItems, fresh, { failed, readOk, courseIds }, now = new Da
         item.handIn = p.handIn;
         item.handInAt = p.handInAt;
       }
-    } else if (p.status === "submitted" && f.status === "open" && f.kind === "quiz") {
+    } else if (p.status === "submitted" && f.status === "open" && (f.kind === "quiz" || f.kind === "dropbox")) {
       // A quiz read doesn't always see the attempt (the quiz isn't linked in
-      // Content), so a quiz once confirmed as handed in stays that way.
+      // Content), and Learn stops showing a dropbox's submissions once the
+      // folder closes, so either one confirmed as handed in stays that way.
       item.status = "submitted";
       item.completedAt = p.completedAt;
     }
+    // A closed dropbox read recently is skipped, so the fresh row has no
+    // historyAt. Keep the old one, unless the date moved and it's read again.
+    if (p.historyAt && !item.historyAt && item.status !== "submitted" && Date.parse(p.dueAt) === Date.parse(f.dueAt)) item.historyAt = p.historyAt;
     if (Date.parse(p.dueAt) !== Date.parse(f.dueAt)) {
       const fieldChanged = p.dueField && f.dueField && p.dueField !== f.dueField;
       if (!fieldChanged) {
@@ -546,10 +652,20 @@ function restoreAfterFailure(s, carry, kind, error) {
   s.stale = null;
 }
 
+/**
+ * Closed dropbox folders a read can skip, as item id -> the due date they were
+ * checked against: confirmed as handed in, or read in the last day and found
+ * empty (an extension can still let the student hand it in) or unreadable.
+ */
+function skipChecks(items, now = Date.now()) {
+  const recent = (i) => i.historyAt && now - Date.parse(i.historyAt) < 24 * 60 * 60 * 1000;
+  return new Map((items || []).filter((i) => i.kind === "dropbox" && (i.status === "submitted" || recent(i))).map((i) => [i.id, i.dueAt]));
+}
+
 async function runLiveScan(settings, epoch) {
-  const source = createSource(settings, getCatalog, { relay: relayFetch });
   const before = await getState();
   const carry = carryOf(before);
+  const source = createSource(settings, getCatalog, { relay: relayFetch, skip: skipChecks(carry.items) });
   const firstRead = !carry.lastSyncAt && !carry.items.length;
   await mutate((s) => ({
     ...emptyState(),
@@ -703,7 +819,7 @@ async function runLiveSync({ fromPanel = false } = {}) {
   liveSyncing = true;
   const epoch = modeEpoch;
   const settings = await getSettings();
-  const source = createSource(settings, getCatalog, { relay: relayFetch });
+  const source = createSource(settings, getCatalog, { relay: relayFetch, skip: skipChecks(s0.items) });
   const extra = { run: "sync", fromPanel };
   await mutate((s) => {
     s.syncing = true;
@@ -807,13 +923,16 @@ async function refreshBadge() {
 
 async function notify(kind, itemId, copy, seq) {
   const id = `wn|${kind}|${itemId}|${seq || Date.now()}`;
-  await chrome.notifications.create(id, {
+  const options = {
     type: "basic",
     iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
     title: copy.title,
     message: copy.message,
-    priority: 2,
-  });
+  };
+  // Gecko accepts only those four and throws a type error on anything else,
+  // which would lose every reminder.
+  if (!IS_GECKO) options.priority = 2;
+  await chrome.notifications.create(id, options);
   return id;
 }
 
@@ -948,9 +1067,45 @@ async function submissionCheck(settings, item) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Calendar                                                            */
+/* ------------------------------------------------------------------ */
+
+const CALENDAR_INDEX = "calendarIndex";
+
+/** What the last export told the calendar, so the next one knows what changed. */
+async function calendarIndex() {
+  const { [CALENDAR_INDEX]: saved } = await chrome.storage.local.get(CALENDAR_INDEX);
+  return saved || {};
+}
+
+/**
+ * The deadlines as one calendar file.
+ *
+ * The index of what was last written lives here rather than in the page, so
+ * SEQUENCE keeps going up across exports and a second import changes the
+ * events already in the calendar instead of adding another set. A deadline
+ * that has gone is written out as cancelled for a while, so re-importing
+ * clears it too.
+ */
+async function buildCalendarFile() {
+  const s = await getState();
+  const now = new Date();
+  const events = buildEvents(s.items, s.courses);
+  const plan = planSync(await calendarIndex(), events, now);
+  const cancelled = tombstones(plan.index, now);
+  const ics = toIcs(events, { seqOf: plan.index, cancelled, now, name: CALENDAR_NAME });
+  await chrome.storage.local.set({ [CALENDAR_INDEX]: plan.index });
+  return {
+    ics,
+    filename: icsFilename(now),
+    counts: { events: events.length, added: plan.creates.length, changed: plan.updates.length, removed: cancelled.length },
+  };
+}
+
 /** Asks Learn or Crowdmark, whichever the item lives on. */
 function askSubmitted(settings, item) {
-  return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item) : submissionCheck(settings, item);
+  return item.kind === "crowdmark" ? crowdmarkSubmitted(settings, item, crowdmarkRelay) : submissionCheck(settings, item);
 }
 
 function siteName(settings, item) {
@@ -1030,6 +1185,7 @@ async function sendDueRemindersNow() {
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === CALENDAR_ALARM) await runCalendarSync();
   if (alarm.name === "reminder") await sendDueReminders();
   if (alarm.name === LIVE_SYNC) {
     const settings = await getSettings();
@@ -1042,10 +1198,25 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// Chrome says the network is back. Only fires while the worker is awake; the
-// 5 minute tick covers the rest.
+// The browser says the network is back. Only fires while the worker is awake;
+// the 5 minute tick covers the rest.
 self.addEventListener("online", () => {
   retryUnreachable({ wentOffline: false });
+});
+
+// Gecko lets the student take away access to Learn and give it back from the
+// extensions button. Giving it back reads Learn straight away, so they don't
+// have to find the retry button.
+chrome.permissions?.onAdded?.addListener(async (added) => {
+  const origins = added.origins || [];
+  if (!origins.length || scanning) return;
+  const settings = await getSettings();
+  if (settings.mode !== "live") return;
+  // Connecting Crowdmark grants an origin too, and that reads Crowdmark on its
+  // own. Only access to the course site coming back is worth a full read.
+  const live = liveOrigins(settings);
+  if (!origins.some((o) => live.some((l) => o.startsWith(l)))) return;
+  runScan();
 });
 
 /* ------------------------------------------------------------------ */
@@ -1124,6 +1295,7 @@ async function demoReset() {
 
 async function deleteData() {
   modeEpoch++;
+  await stopCalendarSync({ disconnect: true });
   await chrome.alarms.clear(LIVE_SYNC);
   await chrome.storage.local.clear();
   await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
@@ -1243,6 +1415,19 @@ chrome.commands?.onCommand.addListener((command) => {
 });
 
 async function handle(msg, sender) {
+  if (String(msg?.type || "").startsWith("calendar:")) {
+    if (sender?.id !== chrome.runtime.id || !String(sender.url || "").startsWith(chrome.runtime.getURL(""))) {
+      return { ok: false, reason: "Extension page required." };
+    }
+    if (msg.type === "calendar:export") return { ok: true, ...(await buildCalendarFile()) };
+    if (msg.type === "calendar:connect") return connectCalendar();
+    if (msg.type === "calendar:change-account") return connectCalendar({ changeAccount: true });
+    if (msg.type === "calendar:disconnect") await stopCalendarSync({ disconnect: true });
+    else if (msg.type === "calendar:dismiss") await updateCalendarState((s) => { s.dismissed = true; });
+    else if (msg.type === "calendar:sync") await requestCalendarSync();
+    else return { ok: false, reason: "Unknown calendar action." };
+    return { ok: true };
+  }
   switch (msg && msg.type) {
     case "panel:opened": {
       await ensureCatalog();
@@ -1304,7 +1489,21 @@ async function handle(msg, sender) {
       return { ok: true };
     }
     case "crowdmark:connect":
+      // Access was just given, so register the bridge before reading. The connect
+      // page waits on this answer before it leaves for Crowdmark, so the page it
+      // lands on is one the background can read through.
+      await syncCrowdmarkBridge().catch((e) => console.warn("crowdmark bridge", e));
       return { ok: true, status: await readCrowdmarkOnly() };
+    case "crowdmark:page": {
+      // The bridge is on a Crowdmark page, so a read that looked signed out
+      // now has a tab to run through. onUpdated above covers the same ground,
+      // and readCrowdmarkOnly ignores the second caller.
+      const settings = await getSettings();
+      if (settings.mode !== "live") return { ok: true };
+      const st = await getState();
+      if (!st.crowdmark || st.crowdmark.status !== "ok") readCrowdmarkOnly();
+      return { ok: true };
+    }
     case "crowdmark:probe":
       return { ok: true, report: await probeCrowdmark("worker") };
     case "settings:changed":
@@ -1322,17 +1521,38 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local") return;
+  if (changes.state) {
+    const before = changes.state.oldValue;
+    const after = changes.state.newValue;
+    if (after?.scan?.status === "done" && !after.syncing && (
+      before?.scan?.status !== "done" || before?.lastSyncAt !== after.lastSyncAt ||
+      JSON.stringify(before?.items) !== JSON.stringify(after.items) ||
+      JSON.stringify(before?.courses) !== JSON.stringify(after.courses)
+    )) {
+      requestCalendarSync().catch(() => console.warn("Calendar sync could not be queued"));
+    }
+  }
   if (changes.settings) {
     const before = changes.settings.oldValue;
     const after = changes.settings.newValue;
-    // A new school (or a new mode) starts over: the saved list belongs to the old site.
-    if (after && before && (before.mode !== after.mode || (before.school || null) !== (after.school || null))) {
-      modeEpoch++;
-      await chrome.alarms.clear("reminder");
-      await mutate(() => emptyState());
-      await syncLiveAlarm();
-      await refreshBadge();
-      await syncBridge().catch((e) => console.warn("bridge", e));
+    if (after && before) {
+      const schoolBefore = before.school || null;
+      const schoolAfter = after.school || null;
+      const schoolChanged = schoolBefore !== schoolAfter;
+      // migrateSchool() fills in Waterloo for an install from before the school
+      // picker. That is the same site it has been reading all along, so its
+      // saved list, reminders and badge stay; only a real change starts over.
+      const migrated = schoolChanged && !schoolBefore && schoolAfter === DEFAULT_SCHOOL;
+      // A new school (or a new mode) starts over: the saved list belongs to the old site.
+      if (before.mode !== after.mode || (schoolChanged && !migrated)) {
+        modeEpoch++;
+        await stopCalendarSync();
+        await chrome.alarms.clear("reminder");
+        await mutate(() => emptyState());
+        await syncLiveAlarm();
+        await refreshBadge();
+      }
+      if (schoolChanged) await syncBridge().catch((e) => console.warn("bridge", e));
     }
     if (after && before && before.learnBase !== after.learnBase) {
       const cat = await getCatalog();
@@ -1353,4 +1573,4 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
 });
 
 // Service workers can restart at any time; make sure badge colors stick.
-setup().then(startupCheck);
+setup().then(startupCheck).then(recoverCalendarSync);

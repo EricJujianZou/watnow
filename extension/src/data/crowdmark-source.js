@@ -25,6 +25,17 @@
   Items carry kind "crowdmark" and seenIn ["crowdmark"]. The caller adds
   "crowdmark" to readOk for every course that read completely, so mergeLive
   keeps stored Crowdmark items when Crowdmark could not be read.
+
+  Where the requests run
+    1. The background fetches with credentials "include". Chrome attaches the
+       Crowdmark session to that; Gecko does not always.
+    2. A read that comes back signed out is tried again through an open
+       Crowdmark tab (src/content/crowdmark-bridge.js), where the request
+       leaves Crowdmark's own origin. A tab is what connecting opens, and a
+       Crowdmark page finishing its load asks the background to read again.
+    3. With neither, the status is signed-out or unreachable, and the stored
+       Crowdmark items stay as they are.
+  Only GET requests are used, so no CSRF token is needed.
 */
 
 import { termCodeFor, termFromText } from "./live-source.js";
@@ -78,7 +89,21 @@ function fail(code, message) {
   return e;
 }
 
-async function getJson(base, path) {
+/**
+ * What one answer from Crowdmark means. `signed-out` is a sign-in redirect, a
+ * 401 or 403, or an HTML page where JSON belongs. Anything else that isn't
+ * readable JSON is `unreachable`.
+ */
+function codeFor({ status, signInRedirect, type, json }) {
+  if (status === 401 || status === 403 || signInRedirect) return "signed-out";
+  if (status < 200 || status >= 300) return "unreachable";
+  if (!/json/i.test(type || "")) return "signed-out";
+  if (json === undefined) return "unreachable";
+  return null;
+}
+
+/** One GET from the background, with the session the browser already has. */
+async function workerGet(base, path) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   let res;
@@ -89,22 +114,57 @@ async function getJson(base, path) {
       signal: ctl.signal,
     });
   } catch (e) {
-    throw fail("unreachable", String((e && e.message) || e));
+    return { status: 0, error: String((e && e.message) || e) };
   } finally {
     clearTimeout(timer);
   }
-  const type = res.headers.get("content-type") || "";
-  // Signed out has not been seen on a real account yet. A sign-in redirect, a
-  // 401 or 403, and an HTML page where JSON belongs all count as signed out.
-  const onSignIn = res.redirected && /sign[-_]?in|login/i.test(new URL(res.url).pathname);
-  if (res.status === 401 || res.status === 403 || onSignIn) throw fail("signed-out", `Crowdmark ${res.status}`);
-  if (!res.ok) throw fail("unreachable", `Crowdmark ${res.status}`);
-  if (!/json/i.test(type)) throw fail("signed-out", "Crowdmark answered with a page");
-  try {
-    return await res.json();
-  } catch {
-    throw fail("unreachable", "Crowdmark sent unreadable JSON");
+  const out = {
+    status: res.status,
+    redirected: res.redirected,
+    signInRedirect: res.redirected && /sign[-_]?in|login/i.test(new URL(res.url).pathname),
+    type: res.headers.get("content-type") || "",
+  };
+  if (res.ok && /json/i.test(out.type)) {
+    try {
+      out.json = await res.json();
+    } catch {
+      out.error = "Crowdmark sent unreadable JSON";
+    }
   }
+  return out;
+}
+
+/**
+ * One GET, from the background first and then through an open Crowdmark tab.
+ *
+ * Chrome answers a background request with the Crowdmark cookie attached.
+ * Gecko does not always, and a read with no cookie looks exactly like being
+ * signed out, so a signed-out answer is tried again from a Crowdmark tab,
+ * where the request leaves Crowdmark's own origin. Learn is read the same way;
+ * see fetchVia() in live-source.js. `relay` resolves to the same shape as
+ * workerGet, or { noTab: true } when no Crowdmark tab can run it.
+ */
+async function getJson(base, path, relay, trace) {
+  const direct = await workerGet(base, path);
+  const code = direct.status === 0 ? "unreachable" : codeFor(direct);
+  if (!code) {
+    if (trace) trace.add("worker");
+    return direct.json;
+  }
+  // A real outage is the same from either place, so only a session problem
+  // is worth the second request.
+  if (relay && code === "signed-out") {
+    const viaTab = await relay(path).catch((e) => ({ status: 0, error: String((e && e.message) || e) }));
+    if (viaTab && !viaTab.noTab) {
+      const tabCode = viaTab.status === 0 ? "unreachable" : codeFor(viaTab);
+      if (!tabCode) {
+        if (trace) trace.add("tab");
+        return viaTab.json;
+      }
+      throw fail(tabCode, viaTab.error || `Crowdmark ${viaTab.status} via tab`);
+    }
+  }
+  throw fail(code, direct.error || `Crowdmark ${direct.status}`);
 }
 
 const squash = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -153,18 +213,23 @@ function toItem(base, a, included, courseId, slug) {
  * Reads Crowdmark once.
  * @param {object} settings
  * @param {Array} learnCourses  The Learn courses of this read, to file Crowdmark items under
- * @param {Date} [now]
+ * @param {{relay?: (path: string) => Promise<object>, now?: Date}} [opts]
+ *   relay runs a GET through an open Crowdmark tab, for a browser that won't
+ *   attach the session to a request from the background.
  * @returns {Promise<{status: "ok"|"signed-out"|"unreachable", courses: Array, items: Array, okCourseIds: Set<string>, failedCourseIds: Set<string>, report: object}>}
  */
-export async function readCrowdmark(settings, learnCourses, now = new Date()) {
+export async function readCrowdmark(settings, learnCourses, { relay = null, now = new Date() } = {}) {
   const base = crowdmarkBase(settings);
+  // Which path carried the reads: worker, tab, or both over the course of a check.
+  const via = new Set();
   const out = { status: "ok", courses: [], items: [], okCourseIds: new Set(), failedCourseIds: new Set(), report: { at: now.toISOString() } };
   let list;
   try {
-    list = await getJson(base, COURSES_PATH);
+    list = await getJson(base, COURSES_PATH, relay, via);
   } catch (e) {
     out.status = e.code === "signed-out" ? "signed-out" : "unreachable";
     out.report.error = e.message;
+    out.report.via = [...via].join("+") || null;
     return out;
   }
   const rows = Array.isArray(list && list.data) ? list.data : [];
@@ -197,7 +262,7 @@ export async function readCrowdmark(settings, learnCourses, now = new Date()) {
         };
     try {
       await wait(GAP_MS);
-      const r = await getJson(base, assignmentsPath(row.id));
+      const r = await getJson(base, assignmentsPath(row.id), relay, via);
       const included = (r && r.included) || [];
       const items = (Array.isArray(r && r.data) ? r.data : []).map((a) => toItem(base, a, included, courseId, row.id)).filter(Boolean);
       out.items.push(...items);
@@ -217,6 +282,7 @@ export async function readCrowdmark(settings, learnCourses, now = new Date()) {
   }
   out.report.items = out.items.length;
   out.report.failedCourses = failedCourses;
+  out.report.via = [...via].join("+") || null;
   if (picked.length && failedCourses === Math.min(picked.length, MAX_COURSES)) out.status = "unreachable";
   return out;
 }
@@ -224,12 +290,13 @@ export async function readCrowdmark(settings, learnCourses, now = new Date()) {
 /**
  * Asks Crowdmark whether one assignment is handed in, right before a reminder
  * goes out. Resolves to { submitted, at }, or null when Crowdmark can't be asked.
+ * @param {(path: string) => Promise<object>} [relay]  Reads through an open Crowdmark tab.
  */
-export async function crowdmarkSubmitted(settings, item) {
+export async function crowdmarkSubmitted(settings, item, relay = null) {
   const id = String(item.id || "").replace(/^cm:/, "");
   if (!id || !(await crowdmarkAllowed(settings))) return null;
   try {
-    const r = await getJson(crowdmarkBase(settings), `/api/v2/student/assignments/${encodeURIComponent(id)}`);
+    const r = await getJson(crowdmarkBase(settings), `/api/v2/student/assignments/${encodeURIComponent(id)}`, relay);
     const at = r && r.data && r.data.attributes ? r.data.attributes["submitted-at"] : undefined;
     if (at === undefined) return null;
     return at ? { submitted: true, at } : { submitted: false };

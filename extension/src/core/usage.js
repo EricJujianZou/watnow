@@ -1,7 +1,12 @@
-// Anonymous usage counts for the store build, so we can see how many people
-// install WATnow and whether they keep opening it. Every event carries a random
-// install ID, the version, the install date and how many days old the install
-// is. Nothing from Learn is ever included. Demo builds send nothing.
+// Anonymous usage counts for the Chrome Web Store build, so we can see how many
+// people install WATnow and whether they keep opening it. Every event carries a
+// random install ID, the version, the install date and how many days old the
+// install is. Nothing from Learn is ever included. Demo builds send nothing.
+//
+// Firefox-based browsers send the same events, but only for add-ons.mozilla.org
+// installs where the student left "technical and interaction data" on. The
+// manifest lists it as optional, so Firefox shows it ticked in the install
+// prompt and the student can untick it there or later in about:addons.
 //
 // Three events:
 //   install      once, when Chrome installs the extension
@@ -13,10 +18,11 @@
 //                the retention curve is the list of numbers.
 
 import { TESTER_BUILD } from "./build.js";
+import { IS_GECKO } from "./env.js";
 
-const UMAMI_URL = "https://cloud.umami.is/api/send";
-// Shared with ugmi.ca. Filter Umami by the watnow tag or the hostname below.
-const UMAMI_WEBSITE_ID = "cb84c6d3-69d1-4cdb-93b9-3589b58f981b";
+const UMAMI_URL = "https://analytics.ugmi.ca/api/send";
+// Self-hosted Umami, shared with ugmi.ca. Filter by the watnow tag or the hostname below.
+const UMAMI_WEBSITE_ID = "a1e4ff3e-6ea9-4302-bc07-9b61a099fca8";
 const HOSTNAME = "watnow-extension";
 
 /** Local calendar date, YYYY-MM-DD. Not UTC: a 9pm install in Toronto belongs
@@ -51,13 +57,24 @@ async function usageRecord() {
  *  so this keeps development installs on our own machines out of the counts.
  *  Every uninstall wipes local storage, so a reinstall is a new install ID and
  *  reads as a new person. There is no way around that and no reason to want
- *  one, but it does mean a developer reinstalling all day inflates everything. */
-function fromStore() {
-  return Boolean(chrome.runtime.getManifest().update_url);
+ *  one, but it does mean a developer reinstalling all day inflates everything.
+ *
+ *  Firefox has no update_url. There an add-ons.mozilla.org install reads as
+ *  installType "normal" and a temporary or unpacked one as "development", and
+ *  the student has to still have technical and interaction data turned on. */
+async function fromStore() {
+  if (!IS_GECKO) return Boolean(chrome.runtime.getManifest().update_url);
+  try {
+    const self = await chrome.management.getSelf();
+    if (self.installType !== "normal") return false;
+    return await chrome.permissions.contains({ data_collection: ["technicalAndInteraction"] });
+  } catch {
+    return false;
+  }
 }
 
 async function send(name, extra = {}) {
-  if (!TESTER_BUILD || !fromStore()) return;
+  if (!TESTER_BUILD || !(await fromStore())) return;
   try {
     const { installId, installedOn } = await usageRecord();
     const payload = {
@@ -92,13 +109,13 @@ async function send(name, extra = {}) {
 /** Once per install, from the service worker's onInstalled. The denominator:
  *  how many installs there are, including the ones that never open the panel. */
 export async function pingInstall() {
-  if (!TESTER_BUILD || !fromStore()) return;
+  if (!TESTER_BUILD || !(await fromStore())) return;
   await send("install");
 }
 
 /** Every panel open. Counts opens, not people. */
 export async function pingPanelOpen() {
-  if (!TESTER_BUILD || !fromStore()) return;
+  if (!TESTER_BUILD || !(await fromStore())) return;
   await send("panel-open");
   await pingDayActive("panel");
 }
@@ -108,7 +125,7 @@ export async function pingPanelOpen() {
  *  `how` is "panel" or "reminder": opening the side panel and acting on a
  *  reminder both count as using WATnow. */
 export async function pingDayActive(how) {
-  if (!TESTER_BUILD || !fromStore()) return;
+  if (!TESTER_BUILD || !(await fromStore())) return;
   try {
     const usage = await usageRecord();
     const day = today();

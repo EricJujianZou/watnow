@@ -73,6 +73,12 @@
      GET /d2l/api/le/{le}/{orgUnitId}/dropbox/folders/{folderId}/submissions/mysubmissions/
        A non-empty list means submitted. Both a flat list of submissions and a
        list of { Submissions: [] } entities are accepted (VERIFY which one UW returns).
+       Once a folder is past Availability.EndDate, students get 403 here (UW,
+       checked Oct 2026), so a folder closed with something in it read as open.
+     GET /d2l/lms/dropbox/user/folders_history.d2l?db={folderId}&ou={orgUnitId}   (HTML)
+       Read after that 403. The "Submission ID  Submission(s)  Date Submitted"
+       header followed by a submission id means submitted; the page without
+       that table means nothing handed in.
      GET /d2l/api/le/{le}/{orgUnitId}/dropbox/categories/
        A category name containing "Lab" sets category "lab".
 
@@ -409,6 +415,9 @@ const ENTITY_KIND = {
   ModuleCO: null,
   DiscussionForum: null,
   GradeObject: null,
+  // A course checklist ("Read the Course Outline"): a to-do list with suggested
+  // dates, not a deadline, and Learn doesn't tell students what they ticked.
+  ChecklistItem: null,
 };
 // Calendar EventType (LE API 1.94+): 1 Reminder, 2 AvailabilityStarts, 3 AvailabilityEnds, 4 UnlockStarts, 5 UnlockEnds, 6 DueDate.
 const EVENT_TYPE = { 1: "reminder", 2: "opens", 3: "ends", 4: "opens", 5: "ends", 6: "due" };
@@ -570,6 +579,10 @@ export class LiveSource {
     this.base = liveBase(settings);
     this.settings = settings;
     this.relay = opts.relay || null;
+    // Closed dropbox folders that don't need their history page read this time,
+    // as item id -> the due date they were checked against: confirmed as
+    // submitted, or read in the last day and found empty or unreadable.
+    this.skip = opts.skip || new Map();
     this.now = opts.now || new Date();
     this.versions = null;
     this.via = "worker";
@@ -1077,7 +1090,13 @@ export class LiveSource {
       // has handed something in. Before that the link goes to the list page.
       const isGroup = f.GroupTypeId != null;
       let groupId = null;
-      try {
+      let historyAt = null;
+      // A closed folder checked recently: Learn would refuse mysubmissions again,
+      // so skip it and the history page. A moved due date reads it again.
+      const closed = isoOrNull(avail.EndDate) && Date.parse(avail.EndDate) < this.now.getTime();
+      const checkedFor = this.skip.get(`${ou}:dropbox:${f.Id}`);
+      const skip = closed && checkedFor != null && Date.parse(checkedFor) === Date.parse(dueAt);
+      if (!skip) try {
         const subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${f.Id}/submissions/mysubmissions/`));
         const dates = [];
         for (const s of subs) {
@@ -1091,6 +1110,14 @@ export class LiveSource {
         if (dates.length) submittedAt = dates.sort().pop();
       } catch (e) {
         if (e.code === "signed-out") throw e;
+        if (e.code === "forbidden") {
+          const page = await this.readDropboxHistory(ou, f.Id);
+          if (page === "submitted") submittedAt = this.now.toISOString();
+          // Empty (an extension can still let the student hand it in) or a page
+          // that can't be read: read again a day later. A request that failed
+          // is tried again on the next sync.
+          else if (page !== "failed") historyAt = this.now.toISOString();
+        }
       }
       out.push({
         kind: "dropbox",
@@ -1101,6 +1128,7 @@ export class LiveSource {
         opensAt: laterOnly(isoOrNull(avail.StartDate), dueAt),
         categoryName: catNames[f.CategoryId] || "",
         completedAt: submittedAt,
+        historyAt,
         groupId,
         groupFolder: isGroup,
         exactId: isGroup && groupId == null ? false : undefined,
@@ -1151,12 +1179,11 @@ export class LiveSource {
   }
 
   /**
-   * The "Completed - N" count from the quiz's summary page, or null when the
-   * page can't be read or doesn't have it. Only the worker reads it.
+   * One of Learn's own pages as plain text, or null when it can't be read.
+   * Only the worker reads pages; a tab relay only carries /d2l/api/ requests.
    */
-  async quizPageCompleted(ou, quizId, via) {
+  async pageText(path, via) {
     if (via !== "worker") return null;
-    const path = `/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${quizId}&ou=${ou}`;
     const gap = GAP_MS - (Date.now() - this.lastAt);
     if (gap > 0) await wait(gap);
     this.lastAt = Date.now();
@@ -1181,7 +1208,16 @@ export class LiveSource {
       entry.error = "network";
       return null;
     }
-    const plain = text.replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+    return text.replace(/<[^>]*>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/\s+/g, " ");
+  }
+
+  /**
+   * The "Completed - N" count from the quiz's summary page, or null when the
+   * page can't be read or doesn't have it.
+   */
+  async quizPageCompleted(ou, quizId, via) {
+    const plain = await this.pageText(`/d2l/lms/quizzing/user/quiz_summary.d2l?qi=${quizId}&ou=${ou}`, via);
+    if (plain == null) return null;
     const m = plain.match(/\bCompleted\s*[-\u2013\u2014:]\s*(\d+)/i);
     if (!m) {
       // Learn changed the page or shows it in another language; stop asking this run.
@@ -1189,8 +1225,41 @@ export class LiveSource {
       this.report.notes.push("quiz summary page has no completed count");
       return null;
     }
-    entry.count = Number(m[1]);
     return Number(m[1]);
+  }
+
+  /**
+   * Reads a dropbox folder's Submission History page. Learn answers
+   * mysubmissions with 403 once a folder is past its end date, but the history
+   * page still lists what was handed in. Resolves to "submitted", "empty",
+   * "unreadable" (the page came back but can't be told apart, so it can't count
+   * either way) or "failed" (the page didn't come back: offline, Learn down).
+   */
+  async readDropboxHistory(ou, folderId, via = this.via) {
+    if (this.dropboxPageOff) return "unreadable";
+    const plain = await this.pageText(`/d2l/lms/dropbox/user/folders_history.d2l?db=${folderId}&ou=${ou}`, via);
+    if (plain == null) return "failed";
+    // The table's header row, then the first row's submission id.
+    if (/Submission ID\s+Submission\(s\)\s+Date Submitted\s+\d{4,}\s/i.test(plain)) return "submitted";
+    // A submissions table in another layout (a group folder with a "Submitted
+    // By" column, say): something may be in it, so it can't count as empty.
+    if (/Submission ID|Date Submitted/i.test(plain)) return "unreadable";
+    if (/Assignment Type/i.test(plain)) return "empty";
+    // Learn changed the page or shows it in another language; stop asking this run.
+    this.dropboxPageOff = true;
+    this.report.notes.push("dropbox history page has no submissions table");
+    return "unreadable";
+  }
+
+  /**
+   * The history page as a submission check: { submitted: true, at: null },
+   * { submitted: false }, or null when it can't say.
+   */
+  async dropboxHistory(ou, folderId, via = this.via) {
+    const state = await this.readDropboxHistory(ou, folderId, via);
+    if (state === "submitted") return { submitted: true, at: null };
+    if (state === "empty") return { submitted: false };
+    return null;
   }
 
   async readDiscussions(course, le, rep) {
@@ -1273,6 +1342,7 @@ export class LiveSource {
           seen: new Set([source]),
         };
         if (x.opensAt) item.opensAt = x.opensAt;
+        if (x.historyAt) item.historyAt = x.historyAt;
         byKey.set(key, item);
         if (!byTitle.has(tkey)) byTitle.set(tkey, item);
         return;
@@ -1293,6 +1363,7 @@ export class LiveSource {
         found.learnUrl = x.url;
       }
       if (x.opensAt && (!found.opensAt || src === "tool")) found.opensAt = x.opensAt;
+      if (x.historyAt) found.historyAt = x.historyAt;
       if (x.completedAt && found.status !== "submitted") {
         found.status = "submitted";
         found.completedAt = x.completedAt;
@@ -1432,7 +1503,16 @@ export class LiveSource {
       try {
         const { le } = await this.ensureVersions(via);
         if (kind === "dropbox") {
-          const subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${sourceId}/submissions/mysubmissions/`, { via }));
+          let subs;
+          try {
+            subs = listOf(await this.api(`/d2l/api/le/${le}/${ou}/dropbox/folders/${sourceId}/submissions/mysubmissions/`, { via }));
+          } catch (e) {
+            if (e.code !== "forbidden") throw e;
+            // A closed folder: only its history page still says.
+            const page = await this.dropboxHistory(ou, sourceId, via);
+            if (page) return page;
+            throw e;
+          }
           const dates = [];
           for (const x of subs) {
             for (const y of x && Array.isArray(x.Submissions) ? x.Submissions : [x]) if (y) dates.push(isoOrNull(y.SubmissionDate) || new Date().toISOString());

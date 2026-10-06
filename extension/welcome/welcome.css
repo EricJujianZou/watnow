@@ -1,0 +1,217 @@
+/* First-run tab, opened once on install. Points up at the toolbar and opens the side panel. */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("../fonts/bricolage-latin-opsz-wght.woff2") format("woff2");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Figtree";
+  src: url("../fonts/figtree-latin-wght.woff2") format("woff2");
+  font-weight: 300 900;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  color-scheme: light;
+  --ground: #dde6f3;
+  --ink: #1f2440;
+  --ink-soft: #4f5675;
+  --sheet: #f8f9fd;
+  --rule: rgba(31, 36, 64, 0.18);
+  --rule-strong: rgba(31, 36, 64, 0.32);
+  --yellow: #ffe15a;
+  --yellow-press: #f5cf1b;
+  --on-yellow: #1f2440;
+  --font: "Figtree", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --font-display: "Bricolage Grotesque", "Figtree", "Segoe UI", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --ground: #1a1e2c;
+    --ink: #eef0f8;
+    --ink-soft: #b3b9cf;
+    --sheet: #242a3c;
+    --rule: rgba(255, 255, 255, 0.16);
+    --rule-strong: rgba(255, 255, 255, 0.28);
+    --yellow: #ffe15a;
+    --yellow-press: #e8cc3f;
+    --on-yellow: #1f2440;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font);
+  overflow-x: hidden;
+}
+
+.page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: clamp(32px, 6vw, 96px);
+  max-width: 1280px;
+  margin-inline: auto;
+  padding: 196px clamp(16px, 7vw, 120px) clamp(24px, 6vh, 64px);
+}
+
+.spot {
+  position: relative;
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  padding-left: 0;
+}
+
+.arrow {
+  /* Points at the extensions button, which sits near the right end of
+     Chrome's toolbar, about 90% across. The tip is 15/120 of the width in
+     from the right edge, so this puts it at 90vw. */
+  position: fixed;
+  top: 6px;
+  right: calc(10vw - 11px);
+  width: 90px;
+  height: 172px;
+  overflow: visible;
+  pointer-events: none;
+}
+.arrow path {
+  fill: none;
+  stroke: var(--yellow);
+  stroke-width: 15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  mix-blend-mode: multiply;
+  opacity: 0.8;
+}
+@media (prefers-color-scheme: dark) {
+  .arrow path { mix-blend-mode: normal; opacity: 0.9; }
+}
+.arrow .head {
+  stroke-width: 11;
+}
+
+h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.9rem, 1.1rem + 2.6vw, 2.75rem);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin: 0 0 clamp(18px, 3vh, 28px);
+  max-width: 15ch;
+}
+
+.cta {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.05rem, 0.9rem + 0.5vw, 1.25rem);
+  color: var(--on-yellow);
+  background: var(--yellow);
+  border: 1.5px solid var(--on-yellow);
+  padding: 18px 34px;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  cursor: pointer;
+  box-shadow: 5px 5px 0 var(--ink);
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 140ms cubic-bezier(0.16, 1, 0.3, 1), background 140ms;
+}
+.cta:hover {
+  background: var(--yellow-press);
+  transform: translate(-2px, -2px);
+  box-shadow: 7px 7px 0 var(--ink);
+}
+.cta:active {
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.cta:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 4px;
+}
+
+.pin-step {
+  margin-top: clamp(32px, 6vh, 48px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 14px;
+}
+
+.pin-copy {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink-soft);
+  max-width: 24ch;
+}
+
+
+.congrats {
+  align-self: center;
+  max-width: 18ch;
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(2.6rem, 1.2rem + 5vw, 5.25rem);
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+.congrats span {
+  background: linear-gradient(transparent 58%, var(--yellow) 58%, var(--yellow) 92%, transparent 92%);
+}
+@media (prefers-color-scheme: dark) {
+  .congrats span { background: none; color: var(--yellow); }
+}
+.confetti {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cta { transition: none; }
+}
+
+@media (max-width: 760px) {
+  .page { grid-template-columns: 1fr; }
+  .spot { justify-self: end; }
+  .congrats { order: 2; align-self: start; font-size: clamp(2.2rem, 1rem + 6vw, 3rem); }
+}
+
+@media (max-width: 560px) {
+  .spot { justify-self: center; }
+  .congrats { text-align: center; justify-self: center; }
+  .page {
+    justify-content: center;
+    padding-top: 196px;
+  }
+  .spot {
+    align-items: center;
+    text-align: center;
+    padding-left: 0;
+  }
+  h1 {
+    max-width: 20ch;
+    font-size: clamp(1.7rem, 1.3rem + 3vw, 2.2rem);
+  }
+  .pin-step { align-items: center; }
+  .pin-copy { text-align: center; }
+}
