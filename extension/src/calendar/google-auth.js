@@ -110,13 +110,15 @@ async function authorize({ interactive, account }) {
   } catch (e) {
     throw authorizationError(e, interactive);
   }
-  if (!result.token || !GOOGLE_SCOPES.every((s) => result.grantedScopes?.includes(s))) {
-    if (result.token) await chrome.identity.removeCachedAuthToken({ token: result.token });
+  const token = typeof result === "string" ? result : result?.token;
+  const granted = Array.isArray(result?.grantedScopes) ? result.grantedScopes : null;
+  if (!token || (granted && !GOOGLE_SCOPES.every((s) => granted.includes(s)))) {
+    if (token) await chrome.identity.removeCachedAuthToken({ token });
     throw calendarError("auth", "Allow the requested Google Calendar permissions to sync deadlines.");
   }
-  const selected = await identify(result.token);
+  const selected = await identify(token);
   if (account && selected.id !== account.id) throw calendarError("auth", "Google returned a different account. Reconnect to choose where your deadlines go.");
-  return { token: result.token, account: selected };
+  return { token, account: selected };
 }
 
 /** Web OAuth can explicitly request account selection; getAuthToken cannot.
