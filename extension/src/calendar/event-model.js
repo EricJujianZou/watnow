@@ -63,24 +63,24 @@ export async function calendarPlan(state, school, records, now = Date.now()) {
     if (!course || !Number.isFinite(Date.parse(item.dueAt))) continue;
     const previous = records[id];
     if (previous?.deleted) continue;
-    if (previous?.removing) {
-      // Finish an interrupted removal before recreating the event, even if
-      // the item came back while the delete response was in flight.
-      if (canRemove(state, courses, previous)) plan.push({ id, remove: true, record: previous });
-      continue;
-    }
+    if (previous?.missing?.retryAt > now) continue;
+    if (previous?.removed && previous.removalRecovery && !canRemove(state, courses, previous)) continue;
     if (!previous && (item.status !== "open" || Date.parse(item.dueAt) <= now)) continue;
     const incarnation = (previous?.incarnation || 0) + (previous?.removed ? 1 : 0);
     const eventId = incarnation ? await eventIdFor(`${key}:republished:${incarnation}`) : id;
     const metadata = { school, courseId: item.courseId, seenIn: item.seenIn || [], key, eventId, incarnation };
     const event = deadlineToEvent(item, course, key);
     const fingerprint = eventFingerprint(event);
-    if (previous?.removed || previous?.fingerprint !== fingerprint || previous?.courseId !== item.courseId || JSON.stringify(previous?.seenIn) !== JSON.stringify(metadata.seenIn)) {
-      plan.push({ id, eventId, event, fingerprint, metadata });
+    if (previous?.removing || previous?.missing || previous?.removed || previous?.fingerprint !== fingerprint || previous?.courseId !== item.courseId || JSON.stringify(previous?.seenIn) !== JSON.stringify(metadata.seenIn)) {
+      // Fingerprints establish creation for older records. A republish uses a
+      // new Google ID, so evidence for the previous incarnation cannot apply.
+      const created = !previous?.removed && !!(previous?.created || previous?.fingerprint);
+      plan.push({ id, eventId, event, fingerprint, metadata, created: created || !!previous?.removing || !!previous?.missing, record: previous, resolveRemoving: !!previous?.removing });
     }
   }
   for (const [id, record] of Object.entries(records)) {
     if (record.deleted || record.removed || record.school !== school || liveIds.has(id)) continue;
+    if (record.missing?.retryAt > now) continue;
     if (canRemove(state, courses, record)) plan.push({ id, remove: true, record });
   }
   return plan;

@@ -27,10 +27,16 @@ export function calendarApi(token, guard = async () => {}) {
     }
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      const reason = data.error?.errors?.[0]?.reason;
-      const retry = res.status === 429 || res.status >= 500 || ["rateLimitExceeded", "userRateLimitExceeded"].includes(reason);
-      const message = retry ? "Google is busy. Your calendar changes are queued." : "Google couldn't update the WATNOW calendar. Check its access and reconnect.";
-      throw Object.assign(calendarError("api", message, retry), { status: res.status });
+      const reasons = (data.error?.errors || []).map((error) => error.reason);
+      const quotaReasons = ["rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "dailyLimitExceeded"];
+      const reason = reasons.find((value) => quotaReasons.includes(value)) || reasons[0];
+      const quota = res.status === 429 || quotaReasons.includes(reason) || data.error?.status === "RESOURCE_EXHAUSTED";
+      const retry = quota || res.status >= 500;
+      const message = quota ? "Google's usage limit was reached. Your changes are queued and will retry automatically." : retry ? "Google is busy. Your calendar changes are queued." : "Google couldn't update the WATNOW calendar. Check its access and reconnect.";
+      throw Object.assign(calendarError("api", message, retry), {
+        status: res.status, reason,
+        backoffScope: reason === "dailyLimitExceeded" ? "project" : "account",
+      });
     }
     try {
       return res.status === 204 ? null : await res.json();

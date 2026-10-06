@@ -46,9 +46,11 @@ A rejected token is removed from Chrome's cache. Account verification retries on
 
 Connections from the earlier Web flow require one explicit Reconnect to authorize the Chrome client for the same account. Calendar IDs and event records are retained. If the new client cannot access the existing calendar, syncing pauses for investigation rather than silently creating a replacement. Native connections saved by older builds without an `auth` field continue through Chrome normally.
 
-The calendar ID is saved per account and reused on reconnect. WATnow no longer reads the calendar list. After uninstalling or deleting local data, it can't find an old calendar automatically, so a new connection may create another WATNOW calendar. If a creation response is lost, background sync pauses instead of trying to create another calendar. Check Google Calendar before reconnecting; that explicit action permits another creation attempt.
+The calendar ID is saved per account and reused on reconnect, including after an inaccessible-calendar response. Reconnect never discards saved event deletions or replaces an inaccessible calendar. If the calendar was actually deleted, syncing remains paused; automatic replacement is not supported. WATnow no longer reads the calendar list. After uninstalling or deleting local data, it can't find an old calendar automatically, so a new connection may create another WATNOW calendar. If a creation response is lost, background sync pauses instead of trying to create another calendar. Check Google Calendar before reconnecting; that explicit action permits another creation attempt.
 
-Event records distinguish a source removal from a deletion in Google. Removal intent is saved before the request, so a lost response can be retried safely. Republished items use a new Google event ID because Google can retain the deleted ID as a tombstone. Old records without course/source information are kept until that information can be read again. Older builds stored both kinds of deletion as just `deleted: true`; those ambiguous records remain untouched rather than restoring events the user may have deleted.
+Event records distinguish a source removal from a deletion in Google. Removal intent is saved before the request, so a lost response can be retried safely. Republished items use a new Google event ID because Google can retain the deleted ID as a tombstone. A 404 for a known event is ambiguous. After rechecking calendar access, WATnow keeps a recoverable missing-event record and retries the same ID with increasing delays, up to an hour. Settings reports missing events; they are never automatically replaced based only on 404 responses. If an event becomes accessible again, updates resume. Explicit deleted/cancelled responses remain permanent user deletions unless WATnow had saved its own removal intent. Interrupted removals of items that have returned are reconciled: an existing owned event is updated, while a confirmed removal can be republished once source-read safeguards permit it.
+
+Old records without course/source information are kept until that information can be read again. Older builds stored both kinds of deletion as just `deleted: true`; those ambiguous records remain untouched rather than restoring events the user may have deleted.
 
 ## What it does with your data
 
@@ -61,15 +63,25 @@ The hosted privacy policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/
 
 ## Before releasing it
 
-Run the regression suite from the repository root with Node.js 22 or newer:
+Quota failures keep changes queued and show a usage-limit message. Backoff is retained per account, including across disconnect/reconnect. A different account does not inherit that deadline; explicitly project-wide daily quota failures retain a shared deadline.
 
-```sh
-node --test --test-isolation=none tests/calendar-regressions.test.mjs
-```
+A confirmed replacement-calendar action is a possible future improvement. It is intentionally deferred to keep this change focused; no replacement control is included in this feature.
 
-The suite covers hide/republish, interrupted deletion, course removal, incomplete reads, legacy records, ownership, duplicate-insert recovery, opt-out persistence and Settings compatibility. Authentication tests exercise fresh worker instances, token renewal, rejected-token retries, account matching, partial consent, disconnect races and migration from Web connections. Chrome and Google are mocked: passing tests prove our integration behavior, not real Chrome account or renewal behavior. No live Google account is used by these tests.
+Regression checks are run with temporary Chrome/Google mocks outside this repository; no test suite is shipped here. These checks validate sync logic, not real Chrome authentication or Google behavior. Record the results separately from the live checks below.
+
+Validate hide/republish with a fresh event ID, deliberate Google deletions (including missing-event responses), interrupted removal, dropped courses, incomplete reads, reconnect without changing calendar IDs or deletion history, and backoff surviving local changes and worker restart. Also check that permanent account-verification failures stop retrying and that offline recovery does not open consent.
 
 Keep `oauth2` absent in release builds until the checks below are complete. Use a development Chrome Extension client for testing, then configure the production client for the published extension ID.
+
+**Manual sync and UX checks on the final candidate:**
+
+1. Hide an assignment in a course that remains listed and refresh successfully. Its event should disappear. Republish and refresh: it should return with a new event ID. Use a course or fixture you control.
+2. Delete an event in Google, then change that item's title/date or check it off in WATnow. It must stay deleted, including after a source hide/republish and reconnect. Exercise 404, 410, and cancelled responses separately with controlled development responses; ordinary deletion does not guarantee a particular response.
+3. Make the saved calendar inaccessible, then reconnect. Its saved ID and event history must remain unchanged, with no replacement calendar created. Restore access and reconnect: syncing should resume. Test a legacy saved `missing` flag too.
+4. Go offline, change an item, then restore connectivity with the panel open. Changes should sync without a consent window. Repeat with the panel closed to check alarm recovery.
+5. With controlled development responses, return 429 or a recognized 403 rate-limit error. Edit items and restart the worker before the retry deadline: no new sync request should run early. After the deadline, restore success and confirm queued changes sync. Also test userinfo 400 (paused error), 403 (Reconnect), and 429/500 (backoff). Do not generate real traffic to force a Google quota limit.
+6. Remove a course from a controlled source snapshot, simulate a failed read, and interrupt an event removal. Course loss or failed reads must preserve events; interrupted WATnow removal must remain republishable.
+7. Confirm the original Crowdmark button/label, overdue wording, and Reminders order. With no OAuth client ID, Calendar UI is hidden. With configuration present, opening the explanation must not open consent; Don't sync must stay dismissed across restart, with Connect still available in Settings.
 
 **Live authentication validation is still a release blocker.** In a real Chrome profile:
 
@@ -80,7 +92,7 @@ Keep `oauth2` absent in release builds until the checks below are complete. Use 
 5. Revoke access and confirm background work pauses for Reconnect without opening a window. Test offline/recovery, partial consent and Disconnect while Connect is pending.
 6. Test upgrading an existing WATnow install: no disable-on-update permission prompt, no calendar prompt for users who never opted in, and authenticated Calendar create/update/delete requests work without a Google host permission.
 
-These live checks have not been completed here. If Chrome-managed authentication cannot meet the required account/restart behavior, keep the feature disabled and reassess whether an authorization backend is justified. Google Cloud scope verification and the disclosures below remain separate release requirements.
+Earlier manual testing was reported for some restart, offline recovery, account, and upgrade scenarios. The complete checklist must be rerun against the final candidate; temporary mocks do not establish those live results. If Chrome-managed authentication cannot meet the required account/restart behavior, keep the feature disabled and reassess whether an authorization backend is justified. Google Cloud scope verification and the disclosures below remain separate release requirements.
 
 `identity` is the only new Chrome permission. The Google host permission has been removed: the APIs support bearer-token requests through CORS. Read-only preflight checks passed for userinfo and Calendar create, update and delete endpoints with a Chrome extension origin. Verify authenticated requests in the real unpacked extension as well. See [Google's CORS documentation](https://developers.google.com/identity/oauth2/web/guides/use-token-model#use_rest_and_cors_with_google_apis).
 

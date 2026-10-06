@@ -954,6 +954,7 @@ chrome.permissions.onAdded.addListener(refreshCm);
 chrome.permissions.onRemoved.addListener(refreshCm);
 
 window.addEventListener("online", () => {
+  if (!PREVIEW) send("calendar:online");
   if (PREVIEW) return;
   if ((state.scan.status === "done" && state.stale) || (state.scan.status === "error" && state.errorKind === "offline")) send("panel:check");
 });

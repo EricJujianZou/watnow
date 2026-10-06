@@ -83,8 +83,22 @@ async function identify(token) {
     await invalidateGoogleToken(token);
     throw calendarError("token", "Google authorization expired. Retrying shortly.", true);
   }
-  if (!res.ok) throw calendarError("network", "Google couldn't confirm the account. Try again.", true);
-  const user = await res.json();
+  if (!res.ok) {
+    if (res.status === 429 || res.status >= 500) {
+      throw calendarError("api", "Google is busy. Your calendar changes are queued.", true);
+    }
+    if (res.status === 403) {
+      await invalidateGoogleToken(token);
+      throw calendarError("auth", "Reconnect Google Calendar to restore account access. If access is blocked, check with your account administrator.");
+    }
+    throw configurationError(`Account verification failed (HTTP ${res.status}).`);
+  }
+  let user;
+  try {
+    user = await res.json();
+  } catch {
+    throw calendarError("network", "Google's response was interrupted. Retrying shortly.", true);
+  }
   if (!user.sub || !user.email || !user.email_verified) throw calendarError("auth", "Google didn't confirm an email address. Reconnect to try again.");
   return { id: user.sub, email: user.email };
 }

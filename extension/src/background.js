@@ -13,7 +13,7 @@ import { plannedReminders, reminderCopy, movedCopy, unsubmittedCopy, canConfirm 
 import { pingInstall, pingDayActive } from "./core/usage.js";
 import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
-import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, recoverCalendarSync, stopCalendarSync } from "./calendar/calendar-sync.js";
+import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, recoverCalendarSync, stopCalendarSync, retryCalendarWhenOnline } from "./calendar/calendar-sync.js";
 import { calendarReadStatus } from "./calendar/event-model.js";
 
 const BADGE_BG = "#FFE45C";
@@ -1052,6 +1052,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // 5 minute tick covers the rest.
 self.addEventListener("online", () => {
   retryUnreachable({ wentOffline: false });
+  retryCalendarWhenOnline();
 });
 
 /* ------------------------------------------------------------------ */
@@ -1259,6 +1260,7 @@ async function handle(msg, sender) {
     if (msg.type === "calendar:disconnect") await stopCalendarSync({ disconnect: true });
     else if (msg.type === "calendar:dismiss") await stopCalendarSync({ disconnect: true });
     else if (msg.type === "calendar:sync") await requestCalendarSync();
+    else if (msg.type === "calendar:online") await retryCalendarWhenOnline();
     else return { ok: false, reason: "Unknown calendar action." };
     return { ok: true };
   }
@@ -1346,8 +1348,9 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (changes.state) {
     const before = changes.state.oldValue;
     const after = changes.state.newValue;
-    if (after?.scan?.status === "done" && !after.syncing && (
+    if (after?.scan?.status === "done" && (
       before?.scan?.status !== "done" || before?.lastSyncAt !== after.lastSyncAt ||
+      (before?.syncing && !after.syncing) ||
       JSON.stringify(before?.items) !== JSON.stringify(after.items) ||
       JSON.stringify(before?.courses) !== JSON.stringify(after.courses)
     )) requestCalendarSync().catch(() => console.warn("Calendar sync could not be queued"));

@@ -15,6 +15,7 @@ export function calendarSettingsHTML(c) {
   if (!googleConfigured()) return "";
   const connected = c.enabled && c.account;
   const busy = c.status === "connecting";
+  const missing = Object.values(c.accounts?.[c.account?.id]?.events || {}).filter((event) => event.missing).length;
   return `
     <h2 id="set-calendar">Google Calendar</h2>
     ${connected ? `<p class="set-help"><strong>${esc(c.account.email)}</strong></p>` : ""}
@@ -28,6 +29,7 @@ export function calendarSettingsHTML(c) {
         ${busy ? '<button class="btn btn-quiet btn-sm" data-calendar-act="disconnect">Cancel</button>' : ""}`}
     </div>
     <p class="status-text calendar-status" role="status">${esc(statusText(c))}</p>
+    ${connected && missing ? `<p class="set-help" role="status">${missing} calendar event${missing === 1 ? "" : "s"} couldn't be found. Check the WATNOW calendar in Google. We'll keep checking and resume updates if they become available; missing events won't be recreated automatically.</p>` : ""}
     <p class="set-help calendar-fine">Connecting shares course and deadline details with Google. <a href="https://watnow.ugmi.ca/privacy/" target="_blank" rel="noopener noreferrer">Privacy policy<span class="sr-only"> (opens in a new tab)</span></a></p>
     <details class="calendar-details">
       <summary>Sync details</summary>

@@ -6,6 +6,49 @@ import { CALENDAR_MARKER, googleConfigured } from "./config.js";
 
 export const CALENDAR_ALARM = "google-calendar-sync";
 let running = null;
+let rerunRequested = false;
+const connectionWorker = crypto.randomUUID();
+
+/** A missing destination may be inaccessible, not deleted. Never replace it
+ * automatically or erase the event history when access changes. */
+async function verifyCalendar(api, calendarId) {
+  let destination;
+  try {
+    destination = await api.getCalendar(calendarId);
+  } catch (e) {
+    if (![403, 404, 410].includes(e.status) || e.retry) throw e;
+    throw calendarError("calendar-missing", "WATnow can't access the saved calendar. If access can be restored, reconnect afterward. If the calendar was deleted, reconnecting won't restore it; replacement calendars aren't supported yet.");
+  }
+  if (destination.description !== CALENDAR_MARKER) {
+    throw calendarError("ownership", "This calendar couldn't be identified as WATnow's. Sync is paused.");
+  }
+}
+
+// Missing is recoverable, unlike an explicit Google deletion. Keep checking
+// the same ID with bounded frequency; never insert a replacement on a guess.
+async function missingEvent(api, calendarId, change) {
+  await verifyCalendar(api, calendarId);
+  const previous = change.record?.missing;
+  const attempts = (previous?.attempts || 0) + 1;
+  return { created: true, missing: {
+    since: previous?.since || Date.now(), attempts,
+    retryAt: Date.now() + Math.min(60, 2 ** Math.min(attempts, 6)) * 60000,
+  } };
+}
+
+function retryDeadline(c) {
+  const accountDeadline = c.account?.id && (!c.retryAccountId || c.retryAccountId === c.account.id) ? c.retryNotBefore || 0 : 0;
+  return Math.max(accountDeadline, c.accounts[c.account?.id]?.retryNotBefore || 0, c.projectRetryNotBefore || 0);
+}
+
+function retainAccountRetry(s) {
+  const id = s.retryAccountId || s.account?.id;
+  if (id && s.accounts[id] && s.retryNotBefore) {
+    s.accounts[id].retryNotBefore = s.retryNotBefore;
+    s.accounts[id].retryAttempts = s.attempts;
+    s.accounts[id].retryCode = s.retryCode;
+  }
+}
 
 /** An insert may have reached Google even if its response never reached us.
  * Look up the deterministic ID before inserting, and recover a 409 as well. */
@@ -15,20 +58,24 @@ export async function reconcileEvent(api, calendarId, change) {
   try {
     existing = await api.getEvent(calendarId, eventId);
   } catch (e) {
-    if (e.status === 410) return { deleted: true };
+    if (e.status === 410) return change.resolveRemoving ? { removed: true, removalRecovery: true } : { deleted: true };
     if (e.status !== 404) throw e;
+    if (change.created) {
+      return missingEvent(api, calendarId, change);
+    }
   }
-  if (existing?.status === "cancelled") return { deleted: true };
+  if (existing?.status === "cancelled") return change.resolveRemoving ? { removed: true, removalRecovery: true } : { deleted: true };
   if (!existing) {
     try {
       await api.insertEvent(calendarId, { id: eventId, ...change.event });
-      return { fingerprint: change.fingerprint };
+      return { created: true, fingerprint: change.fingerprint };
     } catch (e) {
       if (e.status !== 409) throw e;
       try {
         existing = await api.getEvent(calendarId, eventId);
       } catch (e) {
         if (e.status === 410) return { deleted: true };
+        if (e.status === 404) return missingEvent(api, calendarId, change);
         throw e;
       }
       if (existing.status === "cancelled") return { deleted: true };
@@ -37,8 +84,14 @@ export async function reconcileEvent(api, calendarId, change) {
   if (existing.extendedProperties?.private?.watnowKey !== change.event.extendedProperties.private.watnowKey) {
     throw calendarError("ownership", "An event couldn't be identified as a WATnow deadline. Sync is paused.");
   }
-  await api.patchEvent(calendarId, eventId, change.event);
-  return { fingerprint: change.fingerprint };
+  try {
+    await api.patchEvent(calendarId, eventId, change.event);
+  } catch (e) {
+    if (e.status === 410) return change.resolveRemoving ? { removed: true, removalRecovery: true } : { deleted: true };
+    if (e.status !== 404) throw e;
+    return missingEvent(api, calendarId, change);
+  }
+  return { created: true, fingerprint: change.fingerprint };
 }
 
 /** Deletes an event whose item disappeared from state. Checked out the same
@@ -52,7 +105,9 @@ export async function removeEvent(api, calendarId, change, markRemoving) {
   try {
     existing = await api.getEvent(calendarId, eventId);
   } catch (e) {
-    if (e.status === 404) return { removed: true };
+    if (e.status === 404) {
+      return missingEvent(api, calendarId, change);
+    }
     if (e.status === 410) return gone();
     throw e;
   }
@@ -67,12 +122,24 @@ export async function removeEvent(api, calendarId, change, markRemoving) {
     await api.deleteEvent(calendarId, eventId);
   } catch (e) {
     if (e.status !== 404 && e.status !== 410) throw e;
+    if (e.status === 404) return missingEvent(api, calendarId, change);
   }
   return { removed: true };
 }
 
 export async function scheduleCalendarRetry(minutes = 1) {
-  await chrome.alarms.create(CALENDAR_ALARM, { when: Date.now() + minutes * 60000 });
+  const c = await getCalendarState();
+  const deadline = retryDeadline(c);
+  const when = deadline > Date.now() ? deadline : Date.now() + minutes * 60000;
+  await chrome.alarms.create(CALENDAR_ALARM, { when });
+}
+
+/** Connectivity recovery must not bypass rate limits or ask for consent. */
+export async function retryCalendarWhenOnline() {
+  const c = await getCalendarState();
+  if (c.enabled && c.pending && c.status === "queued" && c.retryCode === "network") {
+    await runCalendarSync();
+  }
 }
 
 export async function requestCalendarSync() {
@@ -88,17 +155,15 @@ export async function requestCalendarSync() {
   runCalendarSync();
 }
 
-/** Safe on every worker wake: a stuck "connecting" means the previous worker
- * died mid-auth, so the only recovery is to ask the user to reconnect. Pure
- * storage, no network, since this runs far more often than the browser
- * actually restarts. */
+/** Only a connection abandoned by a previous worker needs recovery. Setup
+ * can finish after a Connect message starts authorization in this worker. */
 export async function resumeCalendarSync() {
-  const c = await getCalendarState();
-  if (c.status !== "connecting") return;
   await updateCalendarState((s) => {
+    if (s.status !== "connecting" || s.connectionWorker === connectionWorker) return false;
     s.generation = crypto.randomUUID();
     s.enabled = false;
     s.status = "off";
+    delete s.connectionWorker;
     s.error = "Connection was interrupted. Select Connect Google Calendar to try again.";
   });
 }
@@ -126,6 +191,7 @@ export async function connectCalendar({ changeAccount = false } = {}) {
     s.generation = crypto.randomUUID();
     s.enabled = false;
     s.status = "connecting";
+    s.connectionWorker = connectionWorker;
     s.error = null;
     s.pending = false;
   });
@@ -134,18 +200,26 @@ export async function connectCalendar({ changeAccount = false } = {}) {
     const { account } = await connectGoogle(before.account);
     const c = await updateCalendarState((s) => {
       if (s.generation !== start.generation) return false;
+      delete s.connectionWorker;
+      retainAccountRetry(s);
       s.account = account;
       s.accounts[account.id] ||= { calendarId: null, events: {} };
-      if (s.accounts[account.id].missing) s.accounts[account.id] = { calendarId: null, events: {} };
+      // Migrate the old ambiguous missing flag without losing the destination.
+      delete s.accounts[account.id].missing;
       // Only an explicit reconnect permits another creation attempt after an
       // uncertain response. Background retries must not create duplicates.
       delete s.accounts[account.id].creatingAt;
       s.enabled = true;
       // Explicitly opting in from Settings brings the shortcut back.
       s.dismissed = false;
-      s.status = "ready";
+      const retry = s.accounts[account.id];
+      s.retryNotBefore = retry.retryNotBefore || 0;
+      s.retryAccountId = account.id;
+      s.attempts = retry.retryAttempts || 0;
+      s.retryCode = retry.retryCode;
+      s.status = retryDeadline(s) > Date.now() ? "queued" : "ready";
       s.lastSyncAt = null;
-      s.attempts = 0;
+      // An explicit reconnect still respects any outstanding API backoff.
     });
     if (c.generation !== start.generation) return { ok: false, reason: "Connection cancelled." };
     await requestCalendarSync();
@@ -155,6 +229,7 @@ export async function connectCalendar({ changeAccount = false } = {}) {
     await updateCalendarState((s) => {
       if (s.generation !== start.generation) return false;
       s.status = "off";
+      delete s.connectionWorker;
       s.error = message;
     });
     return { ok: false, reason: message };
@@ -165,9 +240,15 @@ export async function stopCalendarSync({ disconnect = false } = {}) {
   await updateCalendarState((s) => {
     s.generation = crypto.randomUUID();
     s.pending = false;
+    delete s.connectionWorker;
     s.status = s.enabled && !disconnect ? "ready" : "off";
     s.error = null;
     if (disconnect) {
+      retainAccountRetry(s);
+      delete s.retryNotBefore;
+      delete s.retryAccountId;
+      delete s.retryCode;
+      s.attempts = 0;
       s.enabled = false;
       s.dismissed = true;
       s.account = null;
@@ -179,8 +260,19 @@ export async function stopCalendarSync({ disconnect = false } = {}) {
 }
 
 export function runCalendarSync() {
-  if (running) return running;
-  running = runCalendarSyncNow().catch(() => console.warn("Calendar sync interrupted; pending work will resume.")).finally(() => { running = null; });
+  if (running) {
+    rerunRequested = true;
+    return running;
+  }
+  running = (async () => {
+    // Drain changes received while a request was in flight immediately. Bound
+    // the work during a busy scan; the persisted alarm covers any remainder.
+    for (let pass = 0; pass < 3; pass++) {
+      rerunRequested = false;
+      await runCalendarSyncNow();
+      if (!rerunRequested) break;
+    }
+  })().catch(() => console.warn("Calendar sync interrupted; pending work will resume.")).finally(() => { running = null; });
   return running;
 }
 
@@ -188,9 +280,15 @@ async function runCalendarSyncNow() {
   if (!googleConfigured()) return;
   const c = await getCalendarState();
   if (!c.enabled || !c.account || !c.pending || ["connecting", "reconnect", "error"].includes(c.status)) return;
+  if (retryDeadline(c) > Date.now()) {
+    await scheduleCalendarRetry();
+    return;
+  }
   const settings = await getSettings();
   const state = await getState();
-  if (settings.mode !== "live" || !settings.school || state.scan.status !== "done" || state.syncing) {
+  // Local check-offs can sync while Learn is being refreshed. calendarPlan
+  // separately forbids removals until the source read has completed.
+  if (settings.mode !== "live" || !settings.school || state.scan.status !== "done") {
     await scheduleCalendarRetry();
     return;
   }
@@ -226,15 +324,7 @@ async function runCalendarSyncNow() {
       await guard();
       await save((_s, r) => { r.calendarId = calendarId; delete r.creatingAt; });
     }
-    // A missing calendar must never turn into hundreds of attempted inserts.
-    try {
-      const destination = await api.getCalendar(calendarId);
-      if (destination.description !== CALENDAR_MARKER) throw calendarError("ownership", "This calendar couldn't be identified as WATnow's. Sync is paused.");
-    } catch (e) {
-      if (e.status !== 404 && e.status !== 410) throw e;
-      await save((_s, r) => { r.missing = true; });
-      throw calendarError("calendar-missing", "The WATNOW calendar is missing. Reconnect to create a new one.");
-    }
+    await verifyCalendar(api, calendarId);
     const plan = await calendarPlan(state, settings.school, record.events);
     const started = Date.now();
     let done = 0;
@@ -248,24 +338,49 @@ async function runCalendarSyncNow() {
         });
         await guard();
         await save((_s, r) => {
-          const { removing, fingerprint, ...metadata } = change.record;
-          r.events[change.id] = { ...metadata, ...result };
+          if (result.missing) {
+            // Keep any intent persisted immediately before DELETE.
+            r.events[change.id] = { ...r.events[change.id], ...result };
+          } else {
+            const { removing, fingerprint, missing, ...metadata } = change.record;
+            r.events[change.id] = { ...metadata, ...result };
+          }
         });
       } else {
         const result = await reconcileEvent(api, calendarId, change);
         await guard();
-        await save((_s, r) => { r.events[change.id] = { ...change.metadata, ...result }; });
+        await save((_s, r) => {
+          // A republish has already selected its new incarnation. Do not keep
+          // `removed`, which would advance the ID again on the next lookup.
+          const { removed, removalRecovery, ...previous } = change.record || {};
+          r.events[change.id] = result.missing
+            ? { ...previous, ...change.metadata, ...result }
+            : { ...change.metadata, ...result };
+        });
       }
       done++;
     }
     await guard();
     const next = await save((s) => {
-      s.pending = done < plan.length || s.revision !== c.revision || plan.some((change) => change.remove);
+      const events = Object.values(s.accounts[accountId].events);
+      s.pending = done < plan.length || s.revision !== c.revision || plan.some((change) => change.remove || change.resolveRemoving) || events.some((event) => event.missing);
       s.status = s.pending ? "queued" : "ready";
       s.attempts = 0;
+      delete s.retryCode;
+      delete s.retryNotBefore;
+      delete s.retryAccountId;
+      delete s.accounts[accountId].retryNotBefore;
+      delete s.accounts[accountId].retryAttempts;
+      delete s.accounts[accountId].retryCode;
+      if (s.projectRetryNotBefore <= Date.now()) delete s.projectRetryNotBefore;
       if (!s.pending) s.lastSyncAt = new Date().toISOString();
     });
-    if (next.pending) await scheduleCalendarRetry(0.5);
+    if (next.pending) {
+      const missing = Object.values(next.accounts[accountId].events).filter((event) => event.missing);
+      const onlyMissing = done === plan.length && !plan.some((change) => change.remove || change.resolveRemoving) && missing.length;
+      const delay = onlyMissing ? Math.max(0.5, (Math.min(...missing.map((event) => event.missing.retryAt)) - Date.now()) / 60000) : 0.5;
+      await scheduleCalendarRetry(delay);
+    }
     else {
       await chrome.alarms.clear(CALENDAR_ALARM);
       // A newer state change can arrive while the alarm is being cleared.
@@ -283,10 +398,23 @@ async function runCalendarSyncNow() {
       const retry = e.retry && !(e.code === "token" && s.attempts >= 3);
       s.status = retry ? "queued" : ["auth", "token"].includes(e.code) ? "reconnect" : "error";
       s.error = calendarMessage(e);
+      s.retryCode = e.code;
+      // Network recovery may run immediately; server/token backoff must survive
+      // worker termination, local edits, and the in-flight rerun loop.
+      if (retry && e.code !== "network") {
+        s.retryNotBefore = Date.now() + Math.min(60, 2 ** Math.min(s.attempts, 6)) * 60000;
+        s.retryAccountId = accountId;
+        retainAccountRetry(s);
+        if (e.backoffScope === "project") s.projectRetryNotBefore = s.retryNotBefore;
+      } else {
+        delete s.retryNotBefore;
+        delete s.retryAccountId;
+        delete s.accounts[accountId].retryNotBefore;
+      }
       s.pending = true;
     });
     if (next.generation !== generation) return;
-    if (next.status === "queued") await scheduleCalendarRetry(Math.min(60, 2 ** Math.min(next.attempts, 6)));
+    if (next.status === "queued") await scheduleCalendarRetry(e.code === "network" ? 1 : Math.min(60, 2 ** Math.min(next.attempts, 6)));
     else await chrome.alarms.clear(CALENDAR_ALARM);
   }
 }
