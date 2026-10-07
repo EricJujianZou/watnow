@@ -4,7 +4,6 @@ import { DEMO_SCRIPT, COURSES, ITEMS } from "../src/data/fixtures.js";
 import { brandMark, esc } from "../src/ui/icons.js";
 import { fmtAgo } from "../src/core/dates.js";
 import { TESTER_BUILD } from "../src/core/build.js";
-import { isArcPage } from "../src/core/browser.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const page = document.getElementById("page");
@@ -223,5 +222,3 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 render();
-
-isArcPage(document).then((arc) => arc && chrome.runtime.sendMessage({ type: "env:arc" }).catch(() => {}));

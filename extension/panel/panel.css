@@ -4,12 +4,6 @@ body {
   min-width: 320px;
 }
 
-html.is-popup body {
-  width: 400px;
-  height: 590px;
-  overflow-y: auto;
-}
-
 html.is-dock {
   height: 100%;
 }

@@ -6,13 +6,10 @@ import { mountSettings, applyTheme } from "../src/ui/settings-view.js";
 import { liveBase } from "../src/data/live-source.js";
 import { TESTER_BUILD } from "../src/core/build.js";
 import { pingPanelOpen } from "../src/core/usage.js";
-import { isArcPage } from "../src/core/browser.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const IS_DOCK = new URLSearchParams(location.search).has("dock");
-const IS_TOOLBAR_POPUP = new URLSearchParams(location.search).has("popup") && !IS_DOCK;
 if (IS_DOCK) document.documentElement.classList.add("is-dock");
-else if (IS_TOOLBAR_POPUP) document.documentElement.classList.add("is-popup");
 const PREVIEW = new URLSearchParams(location.search).get("preview");
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const EASE_IN_OUT = "cubic-bezier(0.65, 0, 0.35, 1)";
@@ -34,13 +31,10 @@ let listScroll = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const send = (type, extra = {}) => chrome.runtime.sendMessage({ type, ...extra }).catch(() => null);
 const reduced = () => reduceMotion.matches;
-const scrollTop = () => (IS_TOOLBAR_POPUP ? document.body.scrollTop : window.scrollY);
-const scrollTo = (y) => {
-  if (IS_TOOLBAR_POPUP) document.body.scrollTop = y;
-  else window.scrollTo(0, y);
-};
-const viewHeight = () => (IS_TOOLBAR_POPUP ? document.body.clientHeight : window.innerHeight);
-const maxScroll = () => (IS_TOOLBAR_POPUP ? document.body.scrollHeight : document.documentElement.scrollHeight) - viewHeight();
+const scrollTop = () => window.scrollY;
+const scrollTo = (y) => window.scrollTo(0, y);
+const viewHeight = () => window.innerHeight;
+const maxScroll = () => document.documentElement.scrollHeight - viewHeight();
 
 let queue = Promise.resolve();
 function enqueue(fn) {
@@ -80,9 +74,7 @@ function renderBar() {
     <button class="icon-btn" data-act="settings" aria-label="Reminders and settings">${icon("gear")}</button>`;
 }
 
-const onPageScroll = () => bar.classList.toggle("is-scrolled", scrollTop() > 4);
-if (IS_TOOLBAR_POPUP) document.body.addEventListener("scroll", onPageScroll, { passive: true });
-else window.addEventListener("scroll", onPageScroll, { passive: true });
+window.addEventListener("scroll", () => bar.classList.toggle("is-scrolled", scrollTop() > 4), { passive: true });
 
 /* ------------------------------------------------------------------ */
 /* First scan                                                          */
@@ -743,7 +735,6 @@ setInterval(() => {
   if (!PREVIEW && (state.scan.status === "idle" || state.scan.status === "running") && !state.deletedAt) send("panel:opened");
   // The last check couldn't read Learn: try again now that the student is looking.
   if (!PREVIEW && state.scan.status === "done" && state.stale) send("panel:check");
-  isArcPage(document).then((arc) => arc && send("env:arc"));
 })();
 
 window.addEventListener("online", () => {

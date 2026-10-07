@@ -109,15 +109,25 @@ async function configureOpenMode() {
   else if (wnBrowser?.sidePanelWorks === false) await enableDockMode();
 }
 
-async function probeSidePanel(tab) {
-  if (!chrome.sidePanel?.open) return false;
+// Chrome only honors sidePanel.open() during the click. Any await before it
+// (storage, setOptions) spends that gesture, open() throws, and a fresh install
+// would be stuck in the docked window forever.
+function openSidePanelNow(tab) {
+  if (!chrome.sidePanel?.open || tab?.windowId == null) return Promise.resolve(false);
   try {
-    const opts = { enabled: true, path: "panel/panel.html" };
-    if (tab?.id) opts.tabId = tab.id;
-    await chrome.sidePanel.setOptions(opts);
-    if (tab?.windowId) await chrome.sidePanel.open({ windowId: tab.windowId });
-    else if (tab?.id) await chrome.sidePanel.open({ tabId: tab.id });
-    await wait(400);
+    return chrome.sidePanel.open({ windowId: tab.windowId }).then(
+      () => true,
+      () => false
+    );
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
+async function sidePanelOpened(opened) {
+  if (!(await opened)) return false;
+  await wait(400);
+  try {
     const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
     return contexts.length > 0;
   } catch {
@@ -126,7 +136,12 @@ async function probeSidePanel(tab) {
 }
 
 let probingOpenMode = false;
-chrome.action.onClicked.addListener(async (tab) => {
+chrome.action.onClicked.addListener((tab) => {
+  const opened = openSidePanelNow(tab);
+  onActionClick(tab, opened);
+});
+
+async function onActionClick(tab, opened) {
   const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
   if (wnBrowser?.sidePanelWorks === true) return;
   if (wnBrowser?.sidePanelWorks === false) {
@@ -136,8 +151,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (probingOpenMode) return;
   probingOpenMode = true;
   try {
-    const works = await probeSidePanel(tab);
-    if (works) await enableSidePanelMode();
+    if (await sidePanelOpened(opened)) await enableSidePanelMode();
     else {
       await enableDockMode();
       await openPanelWindow(tab);
@@ -145,7 +159,7 @@ chrome.action.onClicked.addListener(async (tab) => {
   } finally {
     probingOpenMode = false;
   }
-});
+}
 
 chrome.windows.onRemoved.addListener((windowId) => {
   chrome.storage.session.get("panelWindowId").then(({ panelWindowId }) => {
@@ -1096,9 +1110,6 @@ async function handle(msg, sender) {
     }
     case "settings:changed":
       await scheduleReminders();
-      return { ok: true };
-    case "env:arc":
-      await enableDockMode();
       return { ok: true };
     default:
       return { ok: false, reason: "unknown message" };
