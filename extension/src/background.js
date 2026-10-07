@@ -82,27 +82,21 @@ async function openPanelWindow(tab) {
   }
 }
 
-// Bump when the probe changes, so an old saved result is checked again once.
-const OPEN_MODE_VERSION = 2;
-let knownSidePanel = null;
-
 async function enableDockMode() {
-  knownSidePanel = false;
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
     await chrome.action.setPopup({ popup: "" });
-    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: false, v: OPEN_MODE_VERSION } });
+    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: false } });
   } catch (e) {
     console.warn("dock mode", e);
   }
 }
 
 async function enableSidePanelMode() {
-  knownSidePanel = true;
   try {
     await chrome.action.setPopup({ popup: "" });
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: true, v: OPEN_MODE_VERSION } });
+    await chrome.storage.local.set({ wnBrowser: { sidePanelWorks: true } });
   } catch (e) {
     console.warn("side panel mode", e);
   }
@@ -110,48 +104,26 @@ async function enableSidePanelMode() {
 
 /** Restore saved open mode, or leave unset so the first icon click probes side panel support. */
 async function configureOpenMode() {
-  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
-  if (!wnBrowser) return;
-  // A saved "no side panel" result is Arc. Don't call sidePanel.open() again.
-  if (wnBrowser.sidePanelWorks === false) await enableDockMode();
-  else if (wnBrowser.sidePanelWorks === true && wnBrowser.v === OPEN_MODE_VERSION) await enableSidePanelMode();
-}
-
-// Chrome only honors sidePanel.open() during the click. Any await before it
-// (storage, setOptions) spends that gesture, open() throws, and a fresh install
-// would be stuck in the docked window forever.
-function openSidePanelNow(tab) {
-  if (!chrome.sidePanel?.open || tab?.windowId == null) return Promise.resolve(false);
-  try {
-    return chrome.sidePanel.open({ windowId: tab.windowId }).then(
-      () => true,
-      () => false
-    );
-  } catch {
-    return Promise.resolve(false);
+  let { wnBrowser } = await chrome.storage.local.get("wnBrowser");
+  // v:2 was saved by the click handler that called sidePanel.open() immediately.
+  // That call hangs in Arc, so forget that result and probe again the old way.
+  if (wnBrowser?.v) {
+    await chrome.storage.local.remove("wnBrowser");
+    wnBrowser = null;
   }
+  if (wnBrowser?.sidePanelWorks === true) await enableSidePanelMode();
+  else if (wnBrowser?.sidePanelWorks === false) await enableDockMode();
 }
 
-function within(promise, ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(false);
-      }
-    );
-  });
-}
-
-async function sidePanelOpened(opened) {
-  if (!(await within(opened, 700))) return false;
-  await wait(300);
+async function probeSidePanel(tab) {
+  if (!chrome.sidePanel?.open) return false;
   try {
+    const opts = { enabled: true, path: "panel/panel.html" };
+    if (tab?.id) opts.tabId = tab.id;
+    await chrome.sidePanel.setOptions(opts);
+    if (tab?.windowId) await chrome.sidePanel.open({ windowId: tab.windowId });
+    else if (tab?.id) await chrome.sidePanel.open({ tabId: tab.id });
+    await wait(400);
     const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
     return contexts.length > 0;
   } catch {
@@ -160,22 +132,18 @@ async function sidePanelOpened(opened) {
 }
 
 let probingOpenMode = false;
-chrome.action.onClicked.addListener((tab) => {
-  // Arc never finishes sidePanel.open(). Once we know that, don't call it again.
-  if (knownSidePanel === false) {
-    openPanelWindow(tab);
+chrome.action.onClicked.addListener(async (tab) => {
+  const { wnBrowser } = await chrome.storage.local.get("wnBrowser");
+  if (wnBrowser?.sidePanelWorks === true) return;
+  if (wnBrowser?.sidePanelWorks === false) {
+    await openPanelWindow(tab);
     return;
   }
-  const opened = openSidePanelNow(tab);
-  onActionClick(tab, opened);
-});
-
-async function onActionClick(tab, opened) {
-  if (knownSidePanel === true) return;
   if (probingOpenMode) return;
   probingOpenMode = true;
   try {
-    if (await sidePanelOpened(opened)) await enableSidePanelMode();
+    const works = await probeSidePanel(tab);
+    if (works) await enableSidePanelMode();
     else {
       await enableDockMode();
       await openPanelWindow(tab);
@@ -183,7 +151,7 @@ async function onActionClick(tab, opened) {
   } finally {
     probingOpenMode = false;
   }
-}
+});
 
 chrome.windows.onRemoved.addListener((windowId) => {
   chrome.storage.session.get("panelWindowId").then(({ panelWindowId }) => {
