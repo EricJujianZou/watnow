@@ -1,13 +1,14 @@
 /*
   Stages extension/ into dist/<target>/ with a manifest for that browser only.
 
-  extension/manifest.json carries both browsers' keys so the one folder loads
-  unpacked in Chrome and in Firefox. Each browser ignores the other's keys with
+  extension/manifest.json carries Chromium and Gecko keys so the one folder loads
+  unpacked in Chrome, Edge and Firefox. Each browser ignores the other's keys with
   a warning, which is fine while developing but not what we ship, so a packaged
   build gets the keys it actually uses and nothing else.
 
     node tools/pack.mjs firefox   ->  dist/firefox/   (event page + sidebar_action)
     node tools/pack.mjs chrome    ->  dist/chrome/    (service worker + side_panel)
+    node tools/pack.mjs edge      ->  dist/edge/      (service worker + side_panel)
 
   Then web-ext build turns the staged folder into a zip. See package.json.
 */
@@ -35,10 +36,16 @@ const TARGETS = {
     delete m.sidebar_action;
     delete m.browser_specific_settings;
   },
+  // Edge uses the same Chromium APIs. Its store package must not carry a
+  // Chrome Web Store update URL (including one added to the source later).
+  edge(m) {
+    TARGETS.chrome(m);
+    delete m.update_url;
+  },
 };
 
 const target = process.argv[2];
-if (!TARGETS[target]) {
+if (!Object.hasOwn(TARGETS, target)) {
   console.error(`usage: node tools/pack.mjs <${Object.keys(TARGETS).join("|")}>`);
   process.exit(1);
 }
