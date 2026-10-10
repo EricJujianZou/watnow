@@ -6,11 +6,11 @@
 
 **All your course deadlines in one side panel, updated when profs move dates, with reminders before things close.**
 
-A browser extension for students at Waterloo, Guelph, Laurier, McMaster, Queen's, Western and TMU, for Chrome and for Firefox. It reads your school's Brightspace site, which Waterloo calls Learn.
+A browser extension for students at Waterloo, Guelph, Laurier, McMaster, Queen's, Western and TMU, for Chrome, Microsoft Edge and Firefox. It reads your school's Brightspace site, which Waterloo calls Learn.
 
 [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; Firefox Add-ons (listing pending) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
 
-![manifest v3](https://img.shields.io/badge/Manifest_V3-Chrome_+_Firefox-FFE45C?style=flat-square&labelColor=17181C)
+![manifest v3](https://img.shields.io/badge/Manifest_V3-Chrome_+_Edge_+_Firefox-FFE45C?style=flat-square&labelColor=17181C)
 ![license](https://img.shields.io/badge/license-MIT-FFE45C?style=flat-square&labelColor=17181C)
 ![installs](https://img.shields.io/badge/installs-1541-FFE45C?style=flat-square&labelColor=17181C)
 
@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 
 ## What you get
 
-- Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on your course site. On Chrome the list lives in the side panel, on Firefox in the sidebar.
+- Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on your course site. On Chrome the list lives in the side panel, on Edge and Firefox in the sidebar.
 - WATnow rereads your course site every 30 minutes while your browser is open. When a prof pushes a due date, the item shows the new date highlighted with the old one crossed out underneath, so you never have to go back and correct a calendar by hand.
 - Assignments, labs, quizzes and discussions each get their own reminder lead time, anywhere from seven days before the due date to the morning it's due. Reminders stop once your course site shows you submitted, or once you tick the item off yourself.
 - Waterloo students can connect Crowdmark too, and its assignments show up in the same list under the matching course.
@@ -65,6 +65,8 @@ The user count on the Chrome Web Store runs a few days behind these numbers.
 
 Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). Click the WATnow icon in your toolbar and choose your school. Sign in to your course site if you aren't already, and the panel fills itself in. Waterloo students can also select **Connect Crowdmark** in the panel to see Crowdmark deadlines beside their Learn ones.
 
+On desktop Microsoft Edge, you can use the same Chrome Web Store link. Allow extensions from other stores if Edge prompts you, then add WATnow and click its toolbar icon to open the sidebar. To try the dedicated Edge build locally, follow the steps below; this repo does not provide an Edge Add-ons listing link.
+
 The Firefox build, for Firefox, Nightly, Zen, LibreWolf and other Firefox-based browsers, is not on addons.mozilla.org yet. Until it is, build it from this repo with the steps under "Running it from this repo".
 
 Firefox for Android is not supported, because extensions cannot open a sidebar there.
@@ -90,13 +92,28 @@ The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
 This section is for developers. Most people should use the Chrome Web Store link above, which also keeps the extension updated.
 
-`extension/` is the same build that goes to the stores: it reads live course sites only, and the demo fixtures used for recording videos are stripped out. One folder serves both browsers, so its `manifest.json` carries both sets of keys (`service_worker` and `scripts`, `side_panel` and `sidebar_action`) and the code picks between them at runtime in [`extension/src/core/env.js`](extension/src/core/env.js). Each browser ignores the other's keys with a warning.
+`extension/` is the same build that goes to the stores: it reads live course sites only, and the demo fixtures used for recording videos are stripped out. One folder serves all three browsers, so its `manifest.json` carries both Chromium and Gecko keys (`service_worker` and `scripts`, `side_panel` and `sidebar_action`) and the code picks between them at runtime in [`extension/src/core/env.js`](extension/src/core/env.js). Each browser ignores the other's keys with a warning.
 
 **Chrome.** Open `chrome://extensions`, turn on Developer mode, and use **Load unpacked** on the `extension/` folder.
 
+**Microsoft Edge (desktop).** Run `npm ci` and `npm run build:edge`. Open `edge://extensions`, turn on Developer mode, and use **Load unpacked** on `dist/edge/`. Pin WATnow to the toolbar, then click its icon to open the sidebar. After editing the source, rebuild and click **Reload** on the extension card. You can also stage the folder without installing dependencies by running `node tools/pack.mjs edge`.
+
 **Firefox.** Either `npm install && npm run dev:ff`, which opens a clean profile with the extension loaded and reloads it as you edit, or go to `about:debugging#/runtime/this-firefox` and use **Load Temporary Add-on** on `extension/manifest.json`. Expect three manifest warnings there about the Chrome-only keys.
 
-**Packaging.** `npm run build:ff` and `npm run build:chrome` stage `dist/firefox` and `dist/chrome` with a manifest holding only that browser's keys ([`tools/pack.mjs`](tools/pack.mjs)) and zip them for the stores. `npm run lint:ff` runs `web-ext lint` over the staged Firefox build.
+**Packaging.** `npm run build:ff`, `npm run build:chrome` and `npm run build:edge` stage `dist/firefox`, `dist/chrome` and `dist/edge` with a manifest holding only that browser's keys ([`tools/pack.mjs`](tools/pack.mjs)) and zip them for the stores. The Edge package is `dist/watnow-edge-<manifest version>.zip`; it removes any `update_url` from the source manifest so a Chrome store update URL is not shipped to Edge Add-ons. Publishing it requires a separate Microsoft Partner Center submission. `npm run lint:ff` runs `web-ext lint` over the staged Firefox build.
+
+**Why Edge shares the Chrome runtime.** Edge supports the same [`chrome.sidePanel` API](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/sidebar), including `setPanelBehavior({ openPanelOnActionClick: true })`. The existing module service worker, panel, storage and content bridges are reused; no user-agent check or extra site permissions are needed. See Microsoft's [Chrome extension porting guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/port-chrome-extension). Google Calendar sync remains unconfigured in the packaged builds; the calendar-file export is available as before.
+
+If enabling Google Calendar in a custom Edge build, use the Web OAuth setup in the [Google Calendar README](extension/src/calendar/README.md). Edge [does not support `identity.getAuthToken`](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/api-support), so a Chrome-only OAuth client is insufficient.
+
+**Validation.** `npm test` includes isolated packaging checks for all three browsers. Before an Edge release, load `dist/edge/` into a current desktop Edge and check:
+
+- The toolbar icon opens the sidebar and the extension reports no load or service-worker errors.
+- Choosing a school requests access only when needed, and a signed-in Brightspace session fills the panel.
+- Crowdmark can be connected and disconnected, deadlines open the correct pages, reminders work, and calendar-file export downloads successfully.
+- Reloading or restarting Edge preserves settings and cached deadlines.
+
+The automated data-source and calendar tests use mocks; they do not replace these checks with a real school account. Edge mobile is outside this build's validation scope.
 
 For Google Calendar setup, account access and developer notes, see the [Google Calendar README](extension/src/calendar/README.md).
 

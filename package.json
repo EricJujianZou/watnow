@@ -2,7 +2,7 @@
   "name": "watnow",
   "version": "1.0.5",
   "private": true,
-  "description": "WATnow: all your Learn deadlines in one side panel. Chrome and Firefox builds from one source.",
+  "description": "WATnow: all your Learn deadlines in one side panel. Chrome, Edge and Firefox builds from one source.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
     "dev:nightly": "web-ext run --source-dir extension --target firefox-desktop --firefox nightly",
     "lint:ff": "node tools/pack.mjs firefox && web-ext lint --source-dir dist/firefox",
     "build:ff": "node tools/pack.mjs firefox && web-ext build --source-dir dist/firefox --artifacts-dir dist --overwrite-dest --filename watnow-firefox-{version}.zip",
-    "build:chrome": "node tools/pack.mjs chrome && web-ext build --source-dir dist/chrome --artifacts-dir dist --overwrite-dest --filename watnow-chrome-{version}.zip"
+    "build:chrome": "node tools/pack.mjs chrome && web-ext build --source-dir dist/chrome --artifacts-dir dist --overwrite-dest --filename watnow-chrome-{version}.zip",
+    "build:edge": "node tools/pack.mjs edge && web-ext build --source-dir dist/edge --artifacts-dir dist --overwrite-dest --filename watnow-edge-{version}.zip"
   },
   "devDependencies": {
     "ical.js": "^2.1.0",
