@@ -191,6 +191,11 @@ export function termFromText(text, uwCodes = true) {
   if (code) return Number(code[1]);
   const words = s.match(/\b(winter|spring|summer|fall|autumn)\s*[_ ]?\s*(20\d\d)\b/i);
   if (words) return (Number(words[2]) - 1900) * 10 + SEASON_MONTH[words[1].toLowerCase()];
+  // The short form many schools use in course names and codes: "F26", "W27",
+  // "S26" (Guelph's "(F26)", Waterloo's "ENGRM_F26"). Only years 2024 to 2039,
+  // so a section like "S01" isn't read as a term.
+  const short = s.match(/(?<![A-Za-z0-9])([FWS])(2[4-9]|3\d)(?![A-Za-z0-9])/);
+  if (short) return (2000 + Number(short[2]) - 1900) * 10 + { F: 9, W: 1, S: 5 }[short[1]];
   return null;
 }
 

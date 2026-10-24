@@ -35,6 +35,9 @@ export function emptyState() {
     scan: { status: "idle", courses: [], startedAt: null, finishedAt: null },
     student: null,
     courses: [],
+    // LIVE only: courses read but left out of the list (nothing coming up),
+    // which the add-a-deadline form still offers.
+    otherCourses: [],
     items: [],
     lastSyncAt: null,
     syncing: false,
