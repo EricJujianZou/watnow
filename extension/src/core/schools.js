@@ -8,14 +8,17 @@
 //            that school's tabs, and the bridge runs there too)
 //   home     the page "Open <system>" sends students to. Every Brightspace site
 //            answers /d2l/home and sends a signed-out visitor to its own login.
+//   crowdmark  the school's slug in Crowdmark's sign-in address,
+//            app.crowdmark.com/sign-in/<slug>. A school without one has no
+//            Crowdmark sign-in, so the Connect button stays hidden there.
 
 export const SCHOOLS = [
-  { id: "uwaterloo", name: "University of Waterloo", system: "Learn", origin: "https://learn.uwaterloo.ca" },
-  { id: "uoguelph", name: "University of Guelph", system: "CourseLink", origin: "https://courselink.uoguelph.ca" },
-  { id: "wlu", name: "Wilfrid Laurier University", system: "MyLearningSpace", origin: "https://mylearningspace.wlu.ca" },
-  { id: "mcmaster", name: "McMaster University", system: "Avenue to Learn", origin: "https://avenue.cllmcmaster.ca" },
-  { id: "queensu", name: "Queen's University", system: "onQ", origin: "https://onq.queensu.ca" },
-  { id: "uwo", name: "Western University", system: "OWL", origin: "https://westernu.brightspace.com" },
+  { id: "uwaterloo", name: "University of Waterloo", system: "Learn", origin: "https://learn.uwaterloo.ca", crowdmark: "waterloo" },
+  { id: "uoguelph", name: "University of Guelph", system: "CourseLink", origin: "https://courselink.uoguelph.ca", crowdmark: "guelph" },
+  { id: "wlu", name: "Wilfrid Laurier University", system: "MyLearningSpace", origin: "https://mylearningspace.wlu.ca", crowdmark: "wlu" },
+  { id: "mcmaster", name: "McMaster University", system: "Avenue to Learn", origin: "https://avenue.cllmcmaster.ca", crowdmark: "mcmaster" },
+  { id: "queensu", name: "Queen's University", system: "onQ", origin: "https://onq.queensu.ca", crowdmark: "queensu" },
+  { id: "uwo", name: "Western University", system: "OWL", origin: "https://westernu.brightspace.com", crowdmark: "uwo" },
   { id: "tmu", name: "Toronto Metropolitan University", system: "D2L Brightspace", origin: "https://courses.torontomu.ca", aliases: ["https://courses.ryerson.ca"] },
 ];
 

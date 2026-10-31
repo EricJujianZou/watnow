@@ -10,7 +10,7 @@ import { SCHOOLS, schoolById, currentSchool, systemName, homeUrl } from "../src/
 import { TESTER_BUILD } from "../src/core/build.js";
 import { pingPanelOpen } from "../src/core/usage.js";
 import { IS_GECKO } from "../src/core/env.js";
-import { crowdmarkAllowed, crowdmarkBase } from "../src/data/crowdmark-source.js";
+import { crowdmarkAllowed, crowdmarkBase, crowdmarkSupported, crowdmarkSignIn } from "../src/data/crowdmark-source.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const PREVIEW = new URLSearchParams(location.search).get("preview");
@@ -183,9 +183,9 @@ function cmConnecting() {
   return true;
 }
 
-/** Left of refresh: yellow Connect until Crowdmark reads, then a quiet Connected label. Waterloo only for now. */
+/** Left of refresh: yellow Connect until Crowdmark reads, then a quiet Connected label. Only at a school Crowdmark signs in for. */
 function cmButtonHTML(scan) {
-  if (PREVIEW || scan !== "done" || !settings || settings.mode !== "live" || settings.school !== "uwaterloo") return "";
+  if (PREVIEW || scan !== "done" || !settings || settings.mode !== "live" || !crowdmarkSupported(settings)) return "";
   if (cmConnecting()) return `<span class="btn btn-primary btn-sm cm-btn is-connecting" role="status">${icon("refresh", 16, "spin")}Connecting…</span>`;
   // Access was refused. The button still connects, so one more select and an Allow is all it takes.
   if (Date.now() < cmDeniedUntil) return `<button class="btn btn-primary btn-sm cm-btn" data-act="cm-connect">Allow access to connect</button>`;
@@ -248,7 +248,7 @@ async function connectCrowdmark() {
     cmConnectingUntil = 0;
   } else {
     announce("Sign in to Crowdmark in the tab that just opened, and WATnow will pick up your deadlines.");
-    chrome.tabs.create({ url: `${base}/sign-in/waterloo` });
+    chrome.tabs.create({ url: crowdmarkSignIn(settings) });
   }
   renderBar();
   if (view === "list") renderList();
