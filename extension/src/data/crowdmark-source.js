@@ -39,11 +39,26 @@
 */
 
 import { termCodeFor, termFromText } from "./live-source.js";
-import { DEFAULT_SCHOOL } from "../core/schools.js";
+import { DEFAULT_SCHOOL, schoolById, currentSchool } from "../core/schools.js";
 
 export const CROWDMARK_BASE = "https://app.crowdmark.com";
 export const CROWDMARK_ORIGIN = `${CROWDMARK_BASE}/*`;
-export const CROWDMARK_SIGN_IN = `${CROWDMARK_BASE}/sign-in/waterloo`;
+
+/** The school whose Crowdmark the student connects: the picked one, or Waterloo before any is picked. */
+export function crowdmarkSchool(settings) {
+  return currentSchool(settings) || schoolById(DEFAULT_SCHOOL);
+}
+
+/** Whether Crowdmark has a sign-in for that school at all (see core/schools.js). */
+export function crowdmarkSupported(settings) {
+  return !!crowdmarkSchool(settings).crowdmark;
+}
+
+/** Crowdmark's sign-in page for the student's school, or its general one for a school without a slug. */
+export function crowdmarkSignIn(settings) {
+  const slug = crowdmarkSchool(settings).crowdmark;
+  return `${crowdmarkBase(settings)}/sign-in${slug ? `/${slug}` : ""}`;
+}
 
 const TIMEOUT_MS = 20000;
 const GAP_MS = 150;
@@ -70,12 +85,11 @@ export function crowdmarkBase(settings) {
 }
 
 /**
- * True once the student gave WATnow access to Crowdmark. Crowdmark is Waterloo
- * only, so a student who switched to another school reads none of it, even with
- * the permission still granted.
+ * True once the student gave WATnow access to Crowdmark. A school Crowdmark
+ * has no sign-in for reads none of it, even with the permission still granted.
  */
 export async function crowdmarkAllowed(settings) {
-  if (settings && settings.school && settings.school !== DEFAULT_SCHOOL) return false;
+  if (!crowdmarkSupported(settings)) return false;
   try {
     return await chrome.permissions.contains({ origins: [`${crowdmarkBase(settings)}/*`] });
   } catch {
@@ -169,12 +183,18 @@ async function getJson(base, path, relay, trace) {
 
 const squash = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-/** "ECE 207 - Fall 2026" gives { code: "ECE 207", term: 1269 }. */
-export function parseCrowdmarkCourse(name, slug) {
+/**
+ * "ECE 207 - Fall 2026" gives { code: "ECE 207", term: 1269 }. Course numbers
+ * run from two to four digits (Guelph MATH*1155, with the star Guelph writes),
+ * or a digit, letters and a digit (McMaster MATH 1ZA3). uwCodes reads Waterloo term codes (1269) out of
+ * the name; off for other schools, where a four-digit course number would
+ * read as a past term and the course would be skipped.
+ */
+export function parseCrowdmarkCourse(name, slug, uwCodes = true) {
   const text = String(name || "");
-  const m = text.match(/^\s*([A-Za-z]{2,8})\s*[-_ ]?\s*(\d{2,3}[A-Za-z]?)\b/);
+  const m = text.match(/^\s*([A-Za-z]{2,8})\s*[-_ *]?\s*(\d{2,4}[A-Za-z]{0,2}|\d[A-Za-z]{1,2}\d{1,2})\b/);
   const code = m ? `${m[1].toUpperCase()} ${m[2].toUpperCase()}` : text.trim().slice(0, 40);
-  const term = termFromText(text) || termFromText(String(slug || "").replace(/-/g, " "));
+  const term = termFromText(text, uwCodes) || termFromText(String(slug || "").replace(/-/g, " "), uwCodes);
   return { code, term, hasCode: !!m };
 }
 
@@ -234,12 +254,13 @@ export async function readCrowdmark(settings, learnCourses, { relay = null, now 
   }
   const rows = Array.isArray(list && list.data) ? list.data : [];
   const current = termCodeFor(now);
+  const uwCodes = crowdmarkSchool(settings).id === DEFAULT_SCHOOL;
   const byCode = new Map(learnCourses.map((c) => [squash(c.code), c]));
   const picked = [];
   for (const row of rows) {
     const arch = row.relationships && row.relationships["course-archivation"];
     if (arch && arch.data) continue;
-    const parsed = parseCrowdmarkCourse(row.attributes && row.attributes.name, row.id);
+    const parsed = parseCrowdmarkCourse(row.attributes && row.attributes.name, row.id, uwCodes);
     const learn = parsed.hasCode ? byCode.get(squash(parsed.code)) : null;
     if (parsed.term === current || (parsed.term == null && learn)) picked.push({ row, parsed, learn });
   }

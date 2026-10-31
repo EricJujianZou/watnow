@@ -25,7 +25,7 @@ https://github.com/user-attachments/assets/0308c84c-db48-4fef-b2ab-1eab881b1191
 - Every dated thing across your courses sits in one list, sorted into Overdue, Today, This week, Next week and Later. Click an item and it opens on your course site. On Chrome the list lives in the side panel, on Firefox in the sidebar.
 - WATnow rereads your course site every 30 minutes while your browser is open. When a prof pushes a due date, the item shows the new date highlighted with the old one crossed out underneath, so you never have to go back and correct a calendar by hand.
 - Assignments, labs, quizzes and discussions each get their own reminder lead time, anywhere from seven days before the due date to the morning it's due. Reminders stop once your course site shows you submitted, or once you tick the item off yourself.
-- Waterloo students can connect Crowdmark too, and its assignments show up in the same list under the matching course.
+- Students at Waterloo, Guelph, Laurier, McMaster, Queen's and Western can connect Crowdmark too, and its assignments show up in the same list under the matching course.
 - Your deadlines export as a calendar file for Google Calendar, Apple Calendar, Outlook or anything else that reads one. Importing it again later moves the dates that changed instead of leaving you a second copy of everything.
 - The panel still works when your course site is down or your laptop is offline. It keeps showing the list it last read and keeps your reminders, then tries again at the next check.
 
@@ -63,7 +63,7 @@ The user count on the Chrome Web Store runs a few days behind these numbers.
 
 ## Install
 
-Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). Click the WATnow icon in your toolbar and choose your school. Sign in to your course site if you aren't already, and the panel fills itself in. Waterloo students can also select **Connect Crowdmark** in the panel to see Crowdmark deadlines beside their Learn ones.
+Install WATnow from the [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh). Click the WATnow icon in your toolbar and choose your school. Sign in to your course site if you aren't already, and the panel fills itself in. At a school that signs in to Crowdmark (Waterloo, Guelph, Laurier, McMaster, Queen's and Western), you can also select **Connect Crowdmark** in the panel to see Crowdmark deadlines beside the ones from your course site.
 
 The Firefox build, for Firefox, Nightly, Zen, LibreWolf and other Firefox-based browsers, is not on addons.mozilla.org yet. Until it is, build it from this repo with the steps under "Running it from this repo".
 

@@ -6,7 +6,8 @@ import { fmtAgo } from "../src/core/dates.js";
 import { TESTER_BUILD } from "../src/core/build.js";
 import { IS_GECKO } from "../src/core/env.js";
 import { currentSchool } from "../src/core/schools.js";
-import { CROWDMARK_BASE, CROWDMARK_ORIGIN, probeCrowdmark } from "../src/data/crowdmark-probe.js";
+import { CROWDMARK_ORIGIN, probeCrowdmark } from "../src/data/crowdmark-probe.js";
+import { crowdmarkSignIn } from "../src/data/crowdmark-source.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const page = document.getElementById("page");
@@ -193,7 +194,7 @@ page.addEventListener("click", async (e) => {
     setTimeout(() => (status.textContent = ""), 5000);
     return;
   }
-  if (t.dataset.act === "cm-open") chrome.tabs.create({ url: `${CROWDMARK_BASE}/sign-in/waterloo` });
+  if (t.dataset.act === "cm-open") chrome.tabs.create({ url: crowdmarkSignIn(await getSettings()) });
   if (t.dataset.act === "cm-connect" || t.dataset.act === "cm-disconnect") {
     const status = page.querySelector("[data-cm-status]");
     const on = t.dataset.act === "cm-connect";
@@ -204,7 +205,7 @@ page.addEventListener("click", async (e) => {
       return;
     }
     chrome.runtime.sendMessage({ type: "panel:refresh" }).catch(() => {});
-    status.textContent = on ? "Crowdmark is connected. Open the panel to see its deadlines with your Learn ones." : "Crowdmark is disconnected. Its deadlines leave the panel on the next check.";
+    status.textContent = on ? `Crowdmark is connected. Open the panel to see its deadlines with your ${lms} ones.` : "Crowdmark is disconnected. Its deadlines leave the panel on the next check.";
     return;
   }
   if (t.dataset.act === "cm-probe") {

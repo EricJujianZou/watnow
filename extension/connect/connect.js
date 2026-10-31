@@ -18,8 +18,9 @@
 
 import { brandMark, esc } from "../src/ui/icons.js";
 import { getSettings } from "../src/core/store.js";
+import { systemName } from "../src/core/schools.js";
 import { applyTheme } from "../src/ui/settings-view.js";
-import { crowdmarkBase } from "../src/data/crowdmark-source.js";
+import { crowdmarkBase, crowdmarkSignIn } from "../src/data/crowdmark-source.js";
 
 const APP = chrome.i18n.getMessage("appName") || "WATnow";
 const page = document.getElementById("page");
@@ -27,7 +28,7 @@ const page = document.getElementById("page");
 let settings = null;
 let busy = false;
 
-const signInUrl = () => `${crowdmarkBase(settings)}/sign-in/waterloo`;
+const signInUrl = () => crowdmarkSignIn(settings);
 
 /**
  * Granting access by hand, for a browser whose prompt never arrives. Firefox
@@ -61,7 +62,7 @@ function render({ note = "", refused = false } = {}) {
       <span class="mark-tile">${brandMark(40)}</span>
       <div>
         <h1>Connect Crowdmark</h1>
-        <p>${esc(APP)} will show your Crowdmark deadlines beside your Learn ones.</p>
+        <p>${esc(APP)} will show your Crowdmark deadlines beside your ${esc(systemName(settings))} ones.</p>
       </div>
     </div>
     <div class="sheet">
