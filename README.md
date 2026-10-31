@@ -6,7 +6,7 @@
 
 **All your course deadlines in one side panel, updated when profs move dates, with reminders before&nbsp;things&nbsp;close.**
 
-A browser extension for students at Waterloo, Guelph, Laurier, McMaster, Queen's, Western and TMU, for Chrome and for Firefox. It reads your school's Brightspace site, which Waterloo calls Learn.
+A browser extension for students at Waterloo, Guelph, Laurier, McMaster, Queen's, Western, TMU and Brock, for Chrome and for Firefox. It reads your school's Brightspace site, which Waterloo calls Learn.
 
 [Chrome Web Store](https://chromewebstore.google.com/detail/watnow/iikileknbmejmkaonlhkjkpbfnkidibh) &nbsp;·&nbsp; Firefox Add-ons (listing pending) &nbsp;·&nbsp; [Website](https://watnow.ugmi.ca) &nbsp;·&nbsp; [Privacy policy](https://watnow.ugmi.ca/privacy/)
 

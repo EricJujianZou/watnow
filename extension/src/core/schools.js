@@ -17,6 +17,8 @@ export const SCHOOLS = [
   { id: "queensu", name: "Queen's University", system: "onQ", origin: "https://onq.queensu.ca" },
   { id: "uwo", name: "Western University", system: "OWL", origin: "https://westernu.brightspace.com" },
   { id: "tmu", name: "Toronto Metropolitan University", system: "D2L Brightspace", origin: "https://courses.torontomu.ca", aliases: ["https://courses.ryerson.ca"] },
+  // Brock moved to brightspace.brocku.ca in 2023; lms.brocku.ca still serves the same site and sign-in links land on the new one.
+  { id: "brocku", name: "Brock University", system: "Brightspace", origin: "https://brightspace.brocku.ca", aliases: ["https://lms.brocku.ca"] },
 ];
 
 export const DEFAULT_SCHOOL = "uwaterloo";
