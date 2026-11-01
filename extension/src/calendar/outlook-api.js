@@ -48,6 +48,8 @@ export function outlookApi(token, guard = async () => {}) {
     }
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
+      // Graph's own reason, for whoever opens the worker's console. Never the token.
+      console.warn("Outlook request refused:", method, path.split("?")[0], res.status, data?.error?.code || "", String(data?.error?.message || "").slice(0, 200));
       throw Object.assign(calendarError("api", "Outlook couldn't update the WATnow calendar. Check its access and reconnect.", false), {
         status: res.status,
         graphCode: data.error?.code,
@@ -78,16 +80,16 @@ export function outlookApi(token, guard = async () => {}) {
     createCalendar: (name = OUTLOOK_CALENDAR_NAME) => request("/me/calendars", { method: "POST", body: { name } }),
     getCalendar: (id) => request(`/me/calendars/${part(id)}`),
     // Graph documents this filter on /me/events (the whole mailbox), not on one
-    // calendar's events, so it searches there and then checks the calendar. The
-    // value match ignores case, and the response leaves the property out, so it's
-    // read back with $expand and compared exactly.
-    async findEventByKey(calendarId, key) {
+    // calendar's events, so it searches there. The tag is WATnow's own key, so a
+    // match is WATnow's event. The value match ignores case, and the response
+    // leaves the property out, so it's read back with $expand and compared
+    // exactly. (Events have no calendarId property to $select: asking for one
+    // makes Graph refuse the whole request.)
+    async findEventByKey(_calendarId, key) {
       const filter = `singleValueExtendedProperties/Any(ep: ep/id eq ${literal(WATNOW_PROP)} and ep/value eq ${literal(key)})`;
       const expand = `singleValueExtendedProperties($filter=id eq ${literal(WATNOW_PROP)})`;
-      const page = await request(`/me/events?$filter=${part(filter)}&$expand=${part(expand)}&$select=id,calendarId&$top=10`);
-      const exact = (page?.value || []).find((ev) => (ev.singleValueExtendedProperties || []).some((p) => p.id === WATNOW_PROP && p.value === key));
-      if (!exact) return null;
-      return !exact.calendarId || exact.calendarId === calendarId ? exact : null;
+      const page = await request(`/me/events?$filter=${part(filter)}&$expand=${part(expand)}&$select=id&$top=10`);
+      return (page?.value || []).find((ev) => (ev.singleValueExtendedProperties || []).some((p) => p.id === WATNOW_PROP && p.value === key)) || null;
     },
     createEvent: (calendarId, event) => request(`/me/calendars/${part(calendarId)}/events`, { method: "POST", body: event }),
     patchEvent: (eventId, event) => request(`/me/events/${part(eventId)}`, { method: "PATCH", body: event }),

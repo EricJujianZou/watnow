@@ -1429,7 +1429,7 @@ async function handle(msg, sender) {
       return connectOutlookCalendar(msg.email || saved.email || (saved.account && saved.account.email));
     }
     if (msg.type === "outlook:sync") {
-      await requestOutlookSync();
+      await requestOutlookSync({ manual: true });
       return { ok: true };
     }
     if (msg.type === "outlook:disconnect") {

@@ -118,12 +118,21 @@ export async function scheduleOutlookRetry(minutes = 1) {
   await chrome.alarms.create(OUTLOOK_ALARM, { when: Date.now() + minutes * 60000 });
 }
 
-/** Something on the list changed: mark a sync as owed and start one. */
-export async function requestOutlookSync() {
+/**
+ * Something on the list changed: mark a sync as owed and start one. `manual`
+ * is the student pressing Try again after a sync failed, which clears the
+ * failure; an automatic request leaves a failed sync stopped until then.
+ */
+export async function requestOutlookSync({ manual = false } = {}) {
   const s = await updateOutlookState((x) => {
     if (!x.enabled) return false;
     x.pending = true;
     x.revision++;
+    if (manual && x.status === "error") {
+      x.status = "ready";
+      x.error = null;
+      x.attempts = 0;
+    }
   });
   if (!s.enabled || ["connecting", "reconnect", "error"].includes(s.status)) return;
   await scheduleOutlookRetry();

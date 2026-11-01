@@ -138,18 +138,16 @@ test("createCalendar, getCalendar, createEvent, patchEvent use the right paths",
   assert.equal(calls[3].url, `${GRAPH_BASE}/me/events/ev%3D1`);
 });
 
-test("findEventByKey searches the mailbox by tag, escapes quotes, and matches the key exactly", async () => {
+test("findEventByKey searches the mailbox by tag, selects only real fields, escapes quotes, and matches the key exactly", async () => {
   const tagged = (id, value, calendarId = "cal1") => ({ id, calendarId, singleValueExtendedProperties: [{ id: WATNOW_PROP, value }] });
   const calls = fakeFetch([
     // Graph matches the value ignoring case, so a near-miss can come back first.
     { status: 200, json: { value: [tagged("evCase", "UWATERLOO:O'BRIEN"), tagged("ev1", "uwaterloo:o'brien")] } },
     { status: 200, json: { value: [] } },
-    { status: 200, json: { value: [tagged("evOther", "uwaterloo:x", "another-calendar")] } },
   ]);
   const api = outlookApi("tok");
   assert.equal((await api.findEventByKey("cal1", "uwaterloo:o'brien")).id, "ev1");
   assert.equal(await api.findEventByKey("cal1", "uwaterloo:none"), null);
-  assert.equal(await api.findEventByKey("cal1", "uwaterloo:x"), null, "an event in another calendar isn't ours");
 
   const url = new URL(calls[0].url);
   assert.equal(url.pathname, "/v1.0/me/events", "the documented path for this filter");
@@ -158,6 +156,8 @@ test("findEventByKey searches the mailbox by tag, escapes quotes, and matches th
     `singleValueExtendedProperties/Any(ep: ep/id eq '${WATNOW_PROP}' and ep/value eq 'uwaterloo:o''brien')`,
   );
   assert.equal(url.searchParams.get("$expand"), `singleValueExtendedProperties($filter=id eq '${WATNOW_PROP}')`);
+  // Events have no calendarId property: selecting one makes Graph refuse the request.
+  assert.equal(url.searchParams.get("$select"), "id");
   // Spaces, colons and slashes are percent-encoded in the raw URL
   assert.ok(!calls[0].url.split("?")[1].includes(" "));
   assert.ok(calls[0].url.includes("singleValueExtendedProperties%2FAny(ep%3A%20ep%2Fid%20eq%20"));

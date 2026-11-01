@@ -30,7 +30,8 @@ export function outlookSettingsHTML(o) {
   if (!outlookConfigured()) return "";
   const connected = o.enabled && o.account;
   const busy = o.status === "connecting";
-  const needsSignIn = o.status === "reconnect" || o.status === "error";
+  const needsSignIn = o.status === "reconnect";
+  const failed = o.status === "error";
   return `
     <h2 id="set-outlook">Outlook calendar</h2>
     <p class="set-help">Your deadlines go in a separate WATnow calendar in Outlook, and change there when they change here.</p>
@@ -38,7 +39,7 @@ export function outlookSettingsHTML(o) {
       connected
         ? `<p class="set-help">Syncing to <strong>${esc(o.account.email || o.email)}</strong></p>
       <div class="row-actions outlook-actions">
-        <button class="btn btn-primary btn-sm" data-outlook-act="${needsSignIn ? "connect" : "sync"}">${needsSignIn ? "Sign in again" : "Sync now"}</button>
+        <button class="btn btn-primary btn-sm" data-outlook-act="${needsSignIn ? "connect" : "sync"}">${needsSignIn ? "Sign in again" : failed ? "Try again" : "Sync now"}</button>
         <button class="btn btn-quiet btn-sm" data-outlook-act="change">Change email</button>
         <button class="btn btn-quiet btn-sm" data-outlook-act="disconnect">Disconnect</button>
       </div>`
