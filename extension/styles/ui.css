@@ -729,3 +729,34 @@ h3 {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---------- Outlook calendar (src/ui/outlook-view.js) ---------- */
+.outlook-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.outlook-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--ink);
+}
+
+.outlook-field .input {
+  width: 100%;
+  font-weight: var(--weight-medium);
+  color: var(--ink);
+}
+
+.outlook-actions {
+  margin-top: 12px;
+}
+
+.outlook-fine {
+  margin-top: 10px;
+}

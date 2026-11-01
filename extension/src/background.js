@@ -18,6 +18,7 @@ import { probeCrowdmark } from "./data/crowdmark-probe.js";
 import { crowdmarkAllowed, crowdmarkBase, crowdmarkSubmitted, readCrowdmark } from "./data/crowdmark-source.js";
 import { updateCalendarState } from "./core/store.js";
 import { CALENDAR_ALARM, connectCalendar, requestCalendarSync, runCalendarSync, resumeCalendarSync, recoverCalendarSync, stopCalendarSync } from "./calendar/calendar-sync.js";
+import { OUTLOOK_ALARM, connectOutlookCalendar, getOutlookState, requestOutlookSync, resumeOutlookSync, runOutlookSync, stopOutlookSync } from "./calendar/outlook-sync.js";
 
 const BADGE_BG = "#FFE45C";
 const BADGE_TEXT = "#17181C";
@@ -68,6 +69,7 @@ async function setup() {
   chrome.alarms.create("tick", { periodInMinutes: 5 });
   await syncLiveAlarm();
   await resumeCalendarSync();
+  await resumeOutlookSync().catch((e) => console.warn("Outlook sync", e));
 }
 
 // Gecko gives the sidebar its own button, but the action button is the one
@@ -1186,6 +1188,7 @@ async function sendDueRemindersNow() {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === CALENDAR_ALARM) await runCalendarSync();
+  if (alarm.name === OUTLOOK_ALARM) await runOutlookSync();
   if (alarm.name === "reminder") await sendDueReminders();
   if (alarm.name === LIVE_SYNC) {
     const settings = await getSettings();
@@ -1296,6 +1299,7 @@ async function demoReset() {
 async function deleteData() {
   modeEpoch++;
   await stopCalendarSync({ disconnect: true });
+  await stopOutlookSync({ disconnect: true });
   await chrome.alarms.clear(LIVE_SYNC);
   await chrome.storage.local.clear();
   await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });
@@ -1415,6 +1419,25 @@ chrome.commands?.onCommand.addListener((command) => {
 });
 
 async function handle(msg, sender) {
+  if (String(msg?.type || "").startsWith("outlook:")) {
+    // Only WATnow's own pages connect an account, never a script on a school's site.
+    if (sender?.id !== chrome.runtime.id || !String(sender.url || "").startsWith(chrome.runtime.getURL(""))) {
+      return { ok: false, reason: "Extension page required." };
+    }
+    if (msg.type === "outlook:connect") {
+      const saved = await getOutlookState();
+      return connectOutlookCalendar(msg.email || saved.email || (saved.account && saved.account.email));
+    }
+    if (msg.type === "outlook:sync") {
+      await requestOutlookSync();
+      return { ok: true };
+    }
+    if (msg.type === "outlook:disconnect") {
+      await stopOutlookSync({ disconnect: true });
+      return { ok: true };
+    }
+    return { ok: false, reason: "Unknown Outlook action." };
+  }
   if (String(msg?.type || "").startsWith("calendar:")) {
     if (sender?.id !== chrome.runtime.id || !String(sender.url || "").startsWith(chrome.runtime.getURL(""))) {
       return { ok: false, reason: "Extension page required." };
@@ -1530,6 +1553,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
       JSON.stringify(before?.courses) !== JSON.stringify(after.courses)
     )) {
       requestCalendarSync().catch(() => console.warn("Calendar sync could not be queued"));
+      requestOutlookSync().catch(() => console.warn("Outlook sync could not be queued"));
     }
   }
   if (changes.settings) {
@@ -1547,6 +1571,7 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
       if (before.mode !== after.mode || (schoolChanged && !migrated)) {
         modeEpoch++;
         await stopCalendarSync();
+        await stopOutlookSync();
         await chrome.alarms.clear("reminder");
         await mutate(() => emptyState());
         await syncLiveAlarm();

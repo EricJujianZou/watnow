@@ -1,6 +1,8 @@
 import { getState, getSettings, setSettings, getFilter, setFilter, emptyState, getCalendarState, emptyCalendarState } from "../src/core/store.js";
 import { googleConfigured } from "../src/calendar/config.js";
 import { updateCalendarView, wireCalendarControls } from "../src/ui/calendar-view.js";
+import { updateOutlookView } from "../src/ui/outlook-view.js";
+import { emptyOutlookState } from "../src/calendar/outlook-sync.js";
 import { buildModel } from "../src/core/model.js";
 import { fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
 import { icon, brandMark, esc, CATEGORY_ICON } from "../src/ui/icons.js";
@@ -1050,6 +1052,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     updateCalendarView(app, calendar);
     renderBar();
   }
+  if (area === "local" && changes.outlook) updateOutlookView(app, changes.outlook.newValue || emptyOutlookState());
   if (area === "local" && changes.state) onState(changes.state.newValue || emptyState());
   if (area === "local" && changes.settings && changes.settings.newValue) {
     const before = settings;

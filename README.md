@@ -83,6 +83,7 @@ This repo is public so you can read exactly what the extension does with your sc
 - The only thing it sends anywhere is an anonymous count: once when you install it, once each time you open the panel, and once a day if you used it that day. Each one carries a random install ID and the version number, nothing from your courses. That code is in [`extension/src/core/usage.js`](extension/src/core/usage.js).
 - On Firefox the count is listed as optional technical and interaction data. Firefox shows it ticked when you install WATnow, and you can untick it there or later in `about:addons`, after which nothing is sent.
 - The Google Calendar sync code is in this repo but switched off in the store builds, so nothing goes to Google. When it is switched on, connecting it shares course and deadline details with Google. See [what the connection shares and saves](extension/src/calendar/README.md#permissions--scopes).
+- The Outlook calendar sync is optional and switched off until a build has a Microsoft app registered for it. When it's on and you connect it, you type the email you use for Outlook and sign in to Microsoft once; WATnow then sends course names, deadline titles, due dates and links to a separate WATnow calendar in that account. Your sign-in stays in your browser's extension storage on your computer, and disconnecting removes it. The code is in [`extension/src/calendar/`](extension/src/calendar/) (the `outlook-*` files).
 
 The full policy is at [watnow.ugmi.ca/privacy](https://watnow.ugmi.ca/privacy/).
 
