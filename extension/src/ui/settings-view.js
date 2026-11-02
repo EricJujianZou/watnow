@@ -95,15 +95,16 @@ function template(s, courses, context, calendar, outlook) {
   const calendarSection = calendar
     ? `<section class="set-section" aria-labelledby="set-calendar" data-calendar-settings>${calendarSettingsHTML(calendar)}</section>`
     : "";
-  const outlookSection = outlook && outlookConfigured()
-    ? `<section class="set-section" aria-labelledby="set-outlook" data-outlook-settings>${outlookSettingsHTML(outlook)}</section>`
-    : "";
+  // Outlook sync sits in the Calendar section, above the .ics export.
+  const outlookBlock = outlook && outlookConfigured() ? `<div class="outlook-block" data-outlook-settings>${outlookSettingsHTML(outlook)}</div>` : "";
 
   return `
   <div class="settings">
     ${context === "panel" && !TESTER_BUILD ? sourceSection(s) : ""}
     <section class="set-section" aria-labelledby="set-cal">
       <h2 id="set-cal">Calendar</h2>
+      ${outlookBlock}
+      ${outlookBlock ? '<h3 class="cal-export-title">Export a file</h3>' : ""}
       <p class="set-help">Export your deadlines as an .ics file to add to your calendar. You can look up a tutorial how to do that for your Calendar app. If your deadline changes, importing again will only change that deadline, it won't duplicate everything.</p>
       <div class="row-actions" style="margin-top:14px">
         <button class="btn btn-primary btn-sm" data-act="cal-export">Export my deadlines</button>
@@ -121,7 +122,6 @@ function template(s, courses, context, calendar, outlook) {
       ${remindersNote()}
     </section>
     ${calendarSection}
-    ${outlookSection}
 
     <section class="set-section" aria-labelledby="set-look">
       <h2 id="set-look">Appearance</h2>

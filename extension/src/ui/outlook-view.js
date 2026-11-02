@@ -34,7 +34,7 @@ export function outlookSettingsHTML(o) {
   const needsSignIn = o.status === "reconnect";
   const failed = o.status === "error";
   return `
-    <h2 id="set-outlook">Outlook calendar</h2>
+    <h3 id="set-outlook">Sync to Outlook</h3>
     <p class="set-help">Your deadlines go in a separate WATnow calendar in Outlook, and change there when they change here.</p>
     ${
       connected
@@ -55,6 +55,15 @@ export function outlookSettingsHTML(o) {
     }
     <p class="status-text outlook-status" role="status">${esc(statusText(o))}</p>
     <p class="set-help outlook-fine">Connecting sends course names, deadline titles, due dates and links to that Microsoft account. Outlook's own reminders are off on these events, so you keep WATnow's. Disconnecting stops syncing and leaves the events already in Outlook. <a href="https://watnow.ugmi.ca/privacy/" target="_blank" rel="noopener noreferrer">Privacy policy<span class="sr-only"> (opens in a new tab)</span></a></p>`;
+}
+
+/** How the top bar's calendar dot should look for this Outlook state: "attention", "connecting", "connected" or "" when not set up. */
+export function outlookDot(o) {
+  if (!outlookConfigured() || !o) return "";
+  if (o.error || o.status === "reconnect" || o.status === "error") return o.enabled || o.status === "reconnect" ? "attention" : "";
+  // Only signing in shows amber: a routine sync stays green so the dot doesn't flicker every few minutes.
+  if (o.status === "connecting") return "connecting";
+  return o.enabled && o.account ? "connected" : "";
 }
 
 /** Redraws the section from the saved state, keeping an email being typed. */

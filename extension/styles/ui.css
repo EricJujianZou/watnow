@@ -731,6 +731,10 @@ h3 {
 }
 
 /* ---------- Outlook calendar (src/ui/outlook-view.js) ---------- */
+.outlook-block h3:first-child {
+  margin-top: 14px;
+}
+
 .outlook-form {
   display: flex;
   flex-direction: column;
