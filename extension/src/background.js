@@ -1300,6 +1300,8 @@ async function deleteData() {
   modeEpoch++;
   await stopCalendarSync({ disconnect: true });
   await stopOutlookSync({ disconnect: true });
+  // Delete my data clears local storage; the short-lived Outlook access token is in session storage.
+  await chrome.storage.session.remove("outlookToken").catch(() => {});
   await chrome.alarms.clear(LIVE_SYNC);
   await chrome.storage.local.clear();
   await chrome.storage.local.set({ settings: DEFAULT_SETTINGS });

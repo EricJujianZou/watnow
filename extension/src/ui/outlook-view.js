@@ -22,7 +22,8 @@ function statusText(o) {
   if (o.error) return o.error;
   if (o.status === "syncing") return "Syncing…";
   if (o.pending) return "Sync queued.";
-  if (o.lastSyncAt) return `Last synced ${fmtAgo(o.lastSyncAt, new Date())}.`;
+  const skipped = o.skipped ? ` Outlook refused ${o.skipped === 1 ? "1 deadline" : `${o.skipped} deadlines`}; ${o.skipped === 1 ? "it's" : "they're"} tried again when ${o.skipped === 1 ? "it changes" : "they change"}.` : "";
+  if (o.lastSyncAt) return `Last synced ${fmtAgo(o.lastSyncAt, new Date())}.${skipped}`;
   return "";
 }
 
@@ -86,17 +87,27 @@ export function wireOutlookControls(root) {
     const form = e.target.closest("[data-outlook-form]");
     if (!form) return;
     e.preventDefault();
+    const submit = form.querySelector('[type="submit"]');
+    // Off at once, so a double-click or a second Enter can't start a second sign-in.
+    if (!submit || submit.disabled) return;
+    submit.disabled = true;
+    const done = () => {
+      if (submit.isConnected) submit.disabled = false;
+    };
     const email = String(new FormData(form).get("email") || "").trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       say("Type the email you use for Outlook.");
       form.elements.email.focus();
+      done();
       return;
     }
     if (!(await askForMicrosoft())) {
       say("WATnow needs access to Microsoft's sign-in page to connect Outlook. Select Connect Outlook and choose Allow.");
+      done();
       return;
     }
     const res = await chrome.runtime.sendMessage({ type: "outlook:connect", email }).catch(() => null);
+    done();
     if (!res) say("WATnow couldn't start connecting. Reopen the panel and try again.");
     else if (!res.ok) say(res.reason);
     else say(res.note);

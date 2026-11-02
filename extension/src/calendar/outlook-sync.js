@@ -13,7 +13,8 @@
 
     enabled, email, account { id, email, name }
     calendarId       the WATnow calendar in that account
-    events           key -> { graphId, fingerprint, courseId, removed, version }
+    events           key -> { graphId, fingerprint, courseId, removed, version,
+                              failed: the fingerprint Outlook last refused, if any }
     status           off | connecting | ready | syncing | queued | reconnect | error
     pending, revision, attempts, lastSyncAt, error, generation
 
@@ -30,10 +31,10 @@
 
 import { getSettings, getState } from "../core/store.js";
 import { calendarError } from "./google-auth.js";
-import { connectOutlook, getOutlookToken, disconnectOutlook, invalidateOutlookToken } from "./outlook-auth.js";
+import { connectOutlook, getOutlookToken, disconnectOutlook, invalidateOutlookToken, outlookAuthConfigured } from "./outlook-auth.js";
 import { outlookApi } from "./outlook-api.js";
 import { outlookEvent, outlookFingerprint, transactionIdFor } from "./outlook-model.js";
-import { OUTLOOK_CALENDAR_NAME, outlookConfigured } from "./outlook-config.js";
+import { OUTLOOK_CALENDAR_NAME } from "./outlook-config.js";
 
 export const OUTLOOK_ALARM = "outlook-calendar-sync";
 const KEY = "outlook";
@@ -41,6 +42,12 @@ const KEY = "outlook";
 const MAX_CHANGES = 20;
 const MAX_RUN_MS = 25000;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MICROSOFT_LOGIN = ["https://login.microsoftonline.com/*"];
+
+/** An error about one item only: Outlook refused that request, and others can still go through. */
+function itemOnly(e) {
+  return e && e.code === "api" && !e.retry && e.status !== 401;
+}
 
 export function emptyOutlookState() {
   return {
@@ -99,6 +106,8 @@ export function outlookPlan(state, school, records = {}, now = Date.now()) {
     const rec = records[key];
     const event = outlookEvent(item, course, key);
     const fingerprint = outlookFingerprint(event);
+    // Outlook refused this exact version: don't send it again until it changes.
+    if (rec && rec.failed && rec.failed === fingerprint) continue;
     if (!rec || rec.removed) {
       if (item.status === "open" && due > now) plan.push({ key, action: "create", event, fingerprint, courseId: course.id });
     } else if (rec.fingerprint !== fingerprint) {
@@ -106,7 +115,7 @@ export function outlookPlan(state, school, records = {}, now = Date.now()) {
     }
   }
   for (const [key, rec] of Object.entries(records)) {
-    if (live.has(key) || rec.removed || !key.startsWith(`${school}:`)) continue;
+    if (live.has(key) || rec.removed || rec.failed === "delete" || !key.startsWith(`${school}:`)) continue;
     // End of term or a dropped course: leave past events in the calendar.
     if (rec.courseId && !courses.has(rec.courseId)) continue;
     plan.push({ key, action: "delete", graphId: rec.graphId, courseId: rec.courseId });
@@ -159,17 +168,22 @@ export async function resumeOutlookSync() {
  * Resolves to { ok } or { ok: false, reason } for the settings page.
  */
 export async function connectOutlookCalendar(email) {
-  if (!outlookConfigured()) return { ok: false, reason: "Outlook sync isn't set up in this version of WATnow." };
+  if (!outlookAuthConfigured()) return { ok: false, reason: "Outlook sync isn't set up in this version of WATnow." };
   const typed = String(email || "").trim();
   if (!EMAIL.test(typed)) return { ok: false, reason: "Type the email you use for Outlook." };
-  const before = await getOutlookState();
-  if (before.status === "connecting") return { ok: false, reason: "A Microsoft sign-in is already open." };
+  let already = false;
   const start = await updateOutlookState((s) => {
+    // Checked and set in one write, so two clicks close together can't both start.
+    if (s.status === "connecting") {
+      already = true;
+      return false;
+    }
     s.generation++;
     s.status = "connecting";
     s.email = typed;
     s.error = null;
   });
+  if (already) return { ok: false, reason: "A Microsoft sign-in is already open. Finish or close it first." };
   try {
     const { account } = await connectOutlook({ email: typed });
     const done = await updateOutlookState((s) => {
@@ -253,6 +267,11 @@ async function runNow() {
       s.error = null;
     });
     await scheduleOutlookRetry();
+    // Access to Microsoft's sign-in page was taken back (site access changed in
+    // the browser): no token can be fetched, so ask for it again with Sign in again.
+    if (!(await Promise.resolve(chrome.permissions?.contains?.({ origins: MICROSOFT_LOGIN }) ?? true).catch(() => true))) {
+      throw calendarError("auth", "WATnow needs access to Microsoft's sign-in page. Select Sign in again and choose Allow.");
+    }
     const token = await getOutlookToken(s0.account);
     await guard();
     const api = outlookApi(token, guard);
@@ -263,7 +282,19 @@ async function runNow() {
     let done = 0;
     for (const change of plan) {
       if (done >= MAX_CHANGES || Date.now() - started > MAX_RUN_MS) break;
-      const result = await apply(api, calendarId, change, records[change.key]);
+      let result;
+      try {
+        result = await apply(api, calendarId, change, records[change.key]);
+      } catch (e) {
+        // Outlook refused this one item for good (a 400 or 403 on it). Set it
+        // aside and carry on with the rest, instead of stopping every sync on it.
+        // Anything that would fail for every item (sign-in, busy, network,
+        // the calendar itself) still stops the run below.
+        if (!itemOnly(e)) throw e;
+        console.warn("Outlook refused one deadline; it's skipped until it changes.", e.status, e.graphCode || "");
+        const prev = records[change.key] || {};
+        result = { ...prev, courseId: change.courseId, failed: change.action === "delete" ? "delete" : change.fingerprint };
+      }
       await guard();
       await save((s) => {
         s.events[change.key] = result;
@@ -274,6 +305,7 @@ async function runNow() {
       s.pending = done < plan.length || s.revision !== revision;
       s.status = s.pending ? "queued" : "ready";
       s.attempts = 0;
+      s.skipped = Object.values(s.events).filter((r) => r && r.failed).length;
       if (!s.pending) s.lastSyncAt = new Date().toISOString();
     });
     if (next.pending) await scheduleOutlookRetry(0.5);
@@ -345,6 +377,9 @@ async function apply(api, calendarId, change, prev = {}) {
     await api.patchEvent(found.id, change.event);
     return { ...rec, graphId: found.id, fingerprint: change.fingerprint };
   }
-  const made = await api.createEvent(calendarId, { ...change.event, transactionId: transactionIdFor(`${change.key}:v${rec.version}`) });
+  // The calendar's id is in it too: a new calendar (the old one deleted, or
+  // another account) starts versions over, and must not repeat an id Outlook
+  // has already seen.
+  const made = await api.createEvent(calendarId, { ...change.event, transactionId: transactionIdFor(`${calendarId}:${change.key}:v${rec.version}`) });
   return { ...rec, graphId: made && made.id, fingerprint: change.fingerprint };
 }

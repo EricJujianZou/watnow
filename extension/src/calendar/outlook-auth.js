@@ -27,6 +27,11 @@ let authEpoch = 0;
 let interactiveAuth = false;
 
 /** Test hooks only: the client ID is a constant in real builds. */
+/** Whether this build can sign in to Microsoft (it has a client ID). */
+export function outlookAuthConfigured() {
+  return !!clientId;
+}
+
 export const __testing = {
   setClientId(id) {
     clientId = id;
@@ -303,6 +308,12 @@ async function refresh(account) {
   await chrome.storage.local.set({
     [AUTH_KEY]: { ...saved, refreshToken: body.refresh_token || saved.refreshToken, scope: body.scope || saved.scope },
   });
+  // A disconnect (or Delete my data) may have run while the write above was
+  // pending: then this token mustn't be kept.
+  if (epoch !== authEpoch) {
+    await chrome.storage.local.remove(AUTH_KEY).catch(() => {});
+    throw calendarError("cancelled", "Connection cancelled.");
+  }
   await setSessionToken(tokens);
   return tokens.token;
 }
