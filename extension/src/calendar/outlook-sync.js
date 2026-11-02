@@ -23,10 +23,12 @@
   interrupted after Outlook made an event but before WATnow saved its id finds
   that event again instead of making a second one.
 
-  Like the Google sync, only upcoming open deadlines get a new event; one that
-  already has an event keeps getting updates (a check-off adds a tick). A
-  deadline that leaves the list is deleted from Outlook only while its course
-  is still listed, so the end of a term doesn't wipe past events.
+  Every upcoming deadline gets an event, a checked-off or handed-in one too
+  (with a tick), so a calendar rebuilt after the student deleted it looks the
+  same as before. A deadline already past isn't added; one that already has an
+  event keeps getting updates. A deadline that leaves the list is deleted from
+  Outlook only while its course is still listed, so the end of a term doesn't
+  wipe past events.
 */
 
 import { getSettings, getState } from "../core/store.js";
@@ -109,7 +111,7 @@ export function outlookPlan(state, school, records = {}, now = Date.now()) {
     // Outlook refused this exact version: don't send it again until it changes.
     if (rec && rec.failed && rec.failed === fingerprint) continue;
     if (!rec || rec.removed) {
-      if (item.status === "open" && due > now) plan.push({ key, action: "create", event, fingerprint, courseId: course.id });
+      if (due > now) plan.push({ key, action: "create", event, fingerprint, courseId: course.id });
     } else if (rec.fingerprint !== fingerprint) {
       plan.push({ key, action: "update", event, fingerprint, graphId: rec.graphId, courseId: course.id });
     }

@@ -196,3 +196,19 @@ test("a new calendar never reuses a transactionId Outlook already saw", async ()
   assert.ok(ids.every((id) => !first.has(id)), `reused: ${ids.filter((id) => first.has(id))}`);
   assert.notEqual((await sync.getOutlookState()).calendarId, s.calendarId, "a new calendar");
 });
+
+test("a deleted calendar comes back with the checked-off deadlines too", async () => {
+  local.state.items.find((i) => i.id === "a").status = "done";
+  await connected();
+  const before = [...created].sort();
+  assert.ok(before.includes("✓ MATH 135 · a due"), "the checked-off one is there from the start");
+  // The student deletes the WATnow calendar; the next sync rebuilds it.
+  calendars.length = 0;
+  created.length = 0;
+  await sync.updateOutlookState((x) => {
+    x.pending = true;
+    x.revision++;
+  });
+  await sync.runOutlookSync();
+  assert.deepEqual([...created].sort(), before, "the rebuilt calendar has the same events");
+});

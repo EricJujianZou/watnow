@@ -22,9 +22,10 @@ const recordFor = (it) => {
 };
 
 describe("new events", () => {
-  test("only upcoming open deadlines get one", () => {
+  test("every upcoming deadline gets one, checked off or not; past ones don't", () => {
     const plan = outlookPlan(state([item("a", "2026-11-05T03:59:00Z"), item("past", "2026-10-01T03:59:00Z"), item("done", "2026-11-06T03:59:00Z", "done")]), "uwaterloo", {}, NOW);
-    assert.deepEqual(plan.map((p) => `${p.action} ${p.key}`), ["create uwaterloo:a"]);
+    assert.deepEqual(plan.map((p) => `${p.action} ${p.key}`), ["create uwaterloo:a", "create uwaterloo:done"]);
+    assert.match(plan[1].event.subject, /^✓ /, "a checked-off one has its tick");
     assert.equal(plan[0].courseId, "ou1");
     assert.ok(plan[0].event && plan[0].fingerprint);
   });
