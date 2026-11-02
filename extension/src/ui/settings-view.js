@@ -2,6 +2,9 @@
 
 import { getSettings, setSettings, getCalendarState } from "../core/store.js";
 import { calendarSettingsHTML, wireCalendarControls } from "./calendar-view.js";
+import { outlookSettingsHTML, wireOutlookControls } from "./outlook-view.js";
+import { getOutlookState } from "../calendar/outlook-sync.js";
+import { outlookConfigured } from "../calendar/outlook-config.js";
 import { TESTER_BUILD } from "../core/build.js";
 import { IS_GECKO } from "../core/env.js";
 import { LEADS, REMINDER_TYPES } from "../core/reminders.js";
@@ -74,7 +77,7 @@ function leadRow(type, s) {
     </li>`;
 }
 
-function template(s, courses, context, calendar) {
+function template(s, courses, context, calendar, outlook) {
   const r = s.reminders;
   const leadRows = REMINDER_TYPES.map((t) => leadRow(t, s)).join("");
 
@@ -92,12 +95,16 @@ function template(s, courses, context, calendar) {
   const calendarSection = calendar
     ? `<section class="set-section" aria-labelledby="set-calendar" data-calendar-settings>${calendarSettingsHTML(calendar)}</section>`
     : "";
+  // Outlook sync sits in the Calendar section, above the .ics export.
+  const outlookBlock = outlook && outlookConfigured() ? `<div class="outlook-block" data-outlook-settings>${outlookSettingsHTML(outlook)}</div>` : "";
 
   return `
   <div class="settings">
     ${context === "panel" && !TESTER_BUILD ? sourceSection(s) : ""}
     <section class="set-section" aria-labelledby="set-cal">
       <h2 id="set-cal">Calendar</h2>
+      ${outlookBlock}
+      ${outlookBlock ? '<h3 class="cal-export-title">Export a file</h3>' : ""}
       <p class="set-help">Export your deadlines as an .ics file to add to your calendar. You can look up a tutorial how to do that for your Calendar app. If your deadline changes, importing again will only change that deadline, it won't duplicate everything.</p>
       <div class="row-actions" style="margin-top:14px">
         <button class="btn btn-primary btn-sm" data-act="cal-export">Export my deadlines</button>
@@ -158,8 +165,9 @@ function saveIcs(text, filename) {
 
 export async function mountSettings(root, { courses = [], context = "panel", onDeleted } = {}) {
   let settings = await getSettings();
-  root.innerHTML = template(settings, courses, context, await getCalendarState());
+  root.innerHTML = template(settings, courses, context, await getCalendarState(), await getOutlookState());
   wireCalendarControls(root);
+  wireOutlookControls(root);
 
   // The panel mounts settings into the same element every time it is opened, so
   // the listeners are attached once. Two copies would cancel each other out.

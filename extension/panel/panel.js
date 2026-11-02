@@ -1,6 +1,8 @@
 import { getState, getSettings, setSettings, getFilter, setFilter, emptyState, getCalendarState, emptyCalendarState } from "../src/core/store.js";
 import { googleConfigured } from "../src/calendar/config.js";
 import { updateCalendarView, wireCalendarControls } from "../src/ui/calendar-view.js";
+import { updateOutlookView, outlookDot } from "../src/ui/outlook-view.js";
+import { emptyOutlookState, getOutlookState } from "../src/calendar/outlook-sync.js";
 import { buildModel } from "../src/core/model.js";
 import { fmtDate, fmtTime, sameDay } from "../src/core/dates.js";
 import { icon, brandMark, esc, CATEGORY_ICON } from "../src/ui/icons.js";
@@ -24,6 +26,7 @@ const announcer = document.getElementById("announce");
 let state = emptyState();
 let settings = null;
 let calendar = emptyCalendarState();
+let outlook = emptyOutlookState();
 let filter = "all";
 let view = "";
 let lastSeq = 0;
@@ -93,8 +96,11 @@ function calendarButtonHTML(scan) {
   if (calendar.dismissed && !calendar.enabled) return "";
   const connected = calendar.enabled && calendar.account?.email;
   const busy = calendar.status === "connecting" || calendar.status === "syncing";
-  const issue = calendar.error || calendar.status === "reconnect" || calendar.status === "error";
-  const label = connected
+  const outlookIssue = outlookDot(outlook) === "attention";
+  const issue = calendar.error || calendar.status === "reconnect" || calendar.status === "error" || outlookIssue;
+  const label = outlookIssue && !(calendar.error || calendar.status === "reconnect" || calendar.status === "error")
+    ? "Outlook calendar · Needs attention"
+    : connected
     ? `Open Google Calendar${busy ? " · Syncing" : issue ? " · Needs attention" : ""}`
     : busy
     ? "Google Calendar · Connecting"
@@ -109,6 +115,27 @@ function calendarButtonHTML(scan) {
     ? '<span class="calendar-dot is-connected" aria-hidden="true"></span>'
     : "";
   return `<button class="icon-btn calendar-bar-btn" data-act="calendar" aria-label="${esc(label)}">${icon("calendar", 20)}${dot}</button>`;
+}
+
+const OUTLOOK_LABEL = { connected: "Outlook calendar · Syncing", connecting: "Outlook calendar · Signing in", attention: "Outlook calendar · Needs attention" };
+
+/** With Outlook set up and no Google button, the export button becomes a calendar with Outlook's status dot. */
+function outlookButtonHTML(scan) {
+  if (PREVIEW || scan !== "done" || settings?.mode !== "live") return "";
+  const dot = outlookDot(outlook);
+  if (!dot) return "";
+  return `<button class="icon-btn calendar-bar-btn" data-act="outlook-settings" aria-label="${esc(OUTLOOK_LABEL[dot])}">${icon("calendar", 20)}<span class="calendar-dot is-${dot}" aria-hidden="true"></span></button>`;
+}
+
+/** Opens settings at the Outlook part of the Calendar section. */
+async function openOutlookSettings() {
+  await openSettings();
+  const block = app.querySelector("[data-outlook-settings]");
+  if (!block) return;
+  // The Calendar section's heading, clear of the sticky bar.
+  const section = block.closest("section") || block;
+  window.scrollTo({ top: section.getBoundingClientRect().top + window.scrollY - bar.offsetHeight - 8, behavior: reduceMotion.matches ? "auto" : "smooth" });
+  block.querySelector("button, input")?.focus({ preventScroll: true });
 }
 
 function openCalendar() {
@@ -153,7 +180,7 @@ function renderBar() {
       : `<button class="icon-btn" data-act="refresh" aria-label="${busy ? `Reading ${lms()}` : `Check ${lms()} for changes`}" ${busy ? "disabled" : ""}>${icon("refresh", 20, busy ? "spin" : "")}</button>`;
   // The bar can't fit both the Crowdmark button and the status pill at side panel widths; the spinning refresh still shows a check is running.
   const cmBtn = cmButtonHTML(scan);
-  const calendarBtn = calendarButtonHTML(scan);
+  const calendarBtn = calendarButtonHTML(scan) || outlookButtonHTML(scan);
   // Google Calendar sync has its own button when it's set up, so the export one only shows without it.
   const exportBtn = PREVIEW || scan !== "done" || calendarBtn ? "" : `<button class="icon-btn" data-act="cal-export-open" aria-label="Export deadlines to your calendar">${icon("calendar-add")}</button>`;
   if (cmBtn || calendarBtn || exportBtn) status = "";
@@ -997,9 +1024,11 @@ bar.addEventListener("click", (e) => {
   if (t.dataset.act === "refresh") send("panel:refresh");
   if (t.dataset.act === "cm-connect") connectCrowdmark();
   if (t.dataset.act === "calendar") {
-    if (calendar.enabled && calendar.account?.email) openCalendar();
+    if (outlookDot(outlook) === "attention" && !(calendar.error || calendar.status === "reconnect" || calendar.status === "error")) openOutlookSettings();
+    else if (calendar.enabled && calendar.account?.email) openCalendar();
     else showCalendarOptIn();
   }
+  if (t.dataset.act === "outlook-settings") openOutlookSettings();
   if (t.dataset.act === "cal-export-open") openSettings().then(() => app.querySelector('[data-act="cal-export"]')?.focus());
   if (t.dataset.act === "settings") (view === "settings" ? closeSettings() : openSettings());
   if (t.dataset.act === "back") closeSettings();
@@ -1050,6 +1079,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
     updateCalendarView(app, calendar);
     renderBar();
   }
+  if (area === "local" && changes.outlook) {
+    outlook = changes.outlook.newValue || emptyOutlookState();
+    updateOutlookView(app, outlook);
+    renderBar();
+  }
   if (area === "local" && changes.state) onState(changes.state.newValue || emptyState());
   if (area === "local" && changes.settings && changes.settings.newValue) {
     const before = settings;
@@ -1074,6 +1108,7 @@ setInterval(() => {
 (async function init() {
   settings = await getSettings();
   calendar = await getCalendarState();
+  outlook = await getOutlookState();
   wireCalendarControls(app);
   applyTheme(settings.theme);
   document.title = APP;

@@ -59,7 +59,8 @@
     "notifications",
     "alarms",
     "scripting",
-    "identity"
+    "identity",
+    "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
     "https://learn.uwaterloo.ca/*"
@@ -72,7 +73,8 @@
     "https://westernu.brightspace.com/*",
     "https://courses.torontomu.ca/*",
     "https://courses.ryerson.ca/*",
-    "https://app.crowdmark.com/*"
+    "https://app.crowdmark.com/*",
+    "https://login.microsoftonline.com/*"
   ],
   "content_scripts": [
     {
